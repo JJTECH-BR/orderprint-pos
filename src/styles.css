@@ -62,26 +62,36 @@
 }
 
 :root {
-  --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.129 0.042 264.695);
+  --radius: 0.875rem;
+  /* Cores da logo Pizzaria 2 Irmãos */
+  --background: oklch(0.985 0.02 85);          /* creme suave */
+  --foreground: oklch(0.25 0.08 30);            /* marrom escuro */
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.129 0.042 264.695);
+  --card-foreground: oklch(0.25 0.08 30);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.129 0.042 264.695);
-  --primary: oklch(0.208 0.042 265.755);
-  --primary-foreground: oklch(0.984 0.003 247.858);
-  --secondary: oklch(0.968 0.007 247.896);
-  --secondary-foreground: oklch(0.208 0.042 265.755);
-  --muted: oklch(0.968 0.007 247.896);
-  --muted-foreground: oklch(0.554 0.046 257.417);
-  --accent: oklch(0.968 0.007 247.896);
-  --accent-foreground: oklch(0.208 0.042 265.755);
-  --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(0.984 0.003 247.858);
-  --border: oklch(0.929 0.013 255.508);
-  --input: oklch(0.929 0.013 255.508);
-  --ring: oklch(0.704 0.04 256.788);
+  --popover-foreground: oklch(0.25 0.08 30);
+  --primary: oklch(0.58 0.22 27);               /* vermelho pizza */
+  --primary-foreground: oklch(0.99 0.02 90);
+  --secondary: oklch(0.88 0.18 90);             /* amarelo logo */
+  --secondary-foreground: oklch(0.35 0.15 30);
+  --muted: oklch(0.96 0.03 85);
+  --muted-foreground: oklch(0.45 0.05 50);
+  --accent: oklch(0.88 0.18 90);                /* amarelo accent */
+  --accent-foreground: oklch(0.35 0.15 30);
+  --destructive: oklch(0.55 0.24 27);
+  --destructive-foreground: oklch(0.99 0.02 90);
+  --border: oklch(0.9 0.05 80);
+  --input: oklch(0.92 0.04 80);
+  --ring: oklch(0.58 0.22 27);
+  --brand-red: oklch(0.58 0.22 27);
+  --brand-red-dark: oklch(0.45 0.2 27);
+  --brand-yellow: oklch(0.88 0.18 90);
+  --brand-yellow-light: oklch(0.95 0.12 90);
+  --brand-cream: oklch(0.985 0.02 85);
+  --gradient-warm: linear-gradient(135deg, oklch(0.95 0.12 90), oklch(0.985 0.02 85));
+  --gradient-hero: linear-gradient(135deg, oklch(0.58 0.22 27), oklch(0.7 0.2 50));
+  --shadow-warm: 0 10px 30px -10px oklch(0.58 0.22 27 / 0.3);
+  --shadow-card: 0 4px 16px -4px oklch(0.45 0.2 27 / 0.15);
   --chart-1: oklch(0.646 0.222 41.116);
   --chart-2: oklch(0.6 0.118 184.704);
   --chart-3: oklch(0.398 0.07 227.392);
@@ -140,5 +150,44 @@
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);
+  }
+}
+
+/* ============ PRINT TICKET ============ */
+.print-ticket {
+  display: none;
+}
+
+.t-divider {
+  white-space: pre;
+  text-align: center;
+  margin: 4px 0;
+}
+.t-row { display: flex; justify-content: space-between; gap: 8px; }
+.t-center { text-align: center; }
+.t-bold { font-weight: 800; }
+.t-lg { font-size: 14pt; }
+.t-sm { font-size: 9pt; }
+.t-muted { color: #555; }
+.t-item { margin: 2px 0; }
+
+@media print {
+  @page { size: 80mm auto; margin: 4mm; }
+
+  html, body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  .no-print { display: none !important; }
+
+  .print-ticket {
+    display: block !important;
+    font-family: 'Courier New', ui-monospace, monospace;
+    font-size: 11pt;
+    line-height: 1.35;
+    color: #000;
+    width: 72mm;
+    margin: 0 auto;
   }
 }
