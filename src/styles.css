@@ -152,3 +152,42 @@
     color: var(--color-foreground);
   }
 }
+
+/* ============ PRINT TICKET ============ */
+.print-ticket {
+  display: none;
+}
+
+.t-divider {
+  white-space: pre;
+  text-align: center;
+  margin: 4px 0;
+}
+.t-row { display: flex; justify-content: space-between; gap: 8px; }
+.t-center { text-align: center; }
+.t-bold { font-weight: 800; }
+.t-lg { font-size: 14pt; }
+.t-sm { font-size: 9pt; }
+.t-muted { color: #555; }
+.t-item { margin: 2px 0; }
+
+@media print {
+  @page { size: 80mm auto; margin: 4mm; }
+
+  html, body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  .no-print { display: none !important; }
+
+  .print-ticket {
+    display: block !important;
+    font-family: 'Courier New', ui-monospace, monospace;
+    font-size: 11pt;
+    line-height: 1.35;
+    color: #000;
+    width: 72mm;
+    margin: 0 auto;
+  }
+}
