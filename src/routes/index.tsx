@@ -3,6 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import logo from "@/assets/logo.jpeg";
 import { pizzas, pasteis, porcoes, bebidas, sucos, type PizzaSize } from "@/data/menu";
 import { OrderTicket } from "@/components/OrderTicket";
+import { Printer } from "lucide-react";
 
 export const Route = createFileRoute("/")({
   component: Index,
@@ -34,6 +35,9 @@ const tabs: { id: Category; label: string }[] = [
 ];
 
 function Index() {
+  // 1. O estado do Modo Caixa precisa estar AQUI DENTRO, junto com os outros states.
+  const [isCashier, setIsCashier] = useState(() => localStorage.getItem("modoCaixa") === "true");
+
   const [tab, setTab] = useState<Category>("pizzas");
   const [cart, setCart] = useState<CartItem[]>([]);
   const [waiter, setWaiter] = useState("");
@@ -42,6 +46,13 @@ function Index() {
   const [orderNumber, setOrderNumber] = useState<number | null>(null);
 
   const total = useMemo(() => cart.reduce((s, i) => s + i.unitPrice * i.qty, 0), [cart]);
+
+  // 2. A função que altera o Modo Caixa também fica aqui dentro
+  const toggleCashier = () => {
+    const newState = !isCashier;
+    setIsCashier(newState);
+    localStorage.setItem("modoCaixa", String(newState));
+  };
 
   const addItem = (item: Omit<CartItem, "qty" | "key"> & { key: string }) => {
     setCart((prev) => {
@@ -67,14 +78,28 @@ function Index() {
     setNotes("");
   };
 
-  const handlePrint = () => {
+  // 3. O botão de Enviar/Imprimir agora sabe se é Garçom ou Caixa
+  const handleAction = () => {
     if (cart.length === 0) return;
     if (!table.trim()) {
       alert("Informe o número da mesa antes de enviar para a impressora.");
       return;
     }
-    setOrderNumber(Math.floor(Date.now() / 1000) % 10000);
-    setTimeout(() => window.print(), 100);
+
+    const num = Math.floor(Date.now() / 1000) % 10000;
+    setOrderNumber(num);
+
+    if (isCashier) {
+      // Se for o computador do Caixa, ele imprime direto o que montou na tela dele
+      setTimeout(() => {
+        window.print();
+        clearCart(); // Limpa depois de imprimir
+      }, 100);
+    } else {
+      // Se for o Garçom, ele não tenta imprimir. Apenas "envia" (futuramente para o Firebase)
+      alert("Pedido enviado para o Caixa! (Aguardando integração com Firebase)");
+      clearCart();
+    }
   };
 
   return (
@@ -91,6 +116,19 @@ function Index() {
               Cardápio do garçom · Terça a Domingo · 18h às 22h
             </p>
           </div>
+
+          {/* Botão de Modo Caixa (Apenas Visível em Telas Médias/Grandes para não poluir o celular) */}
+          <button
+            onClick={toggleCashier}
+            className={`hidden md:flex items-center gap-2 rounded-lg border-2 px-3 py-2 text-sm font-bold transition-all ${isCashier
+                ? "border-green-500 bg-green-100 text-green-700"
+                : "border-border bg-card text-muted-foreground"
+              }`}
+          >
+            <Printer size={18} />
+            {isCashier ? "Caixa Ativo" : "Modo Garçom"}
+          </button>
+
           <div className="hidden items-center gap-2 md:flex">
             <input
               value={waiter}
@@ -133,11 +171,10 @@ function Index() {
               <button
                 key={t.id}
                 onClick={() => setTab(t.id)}
-                className={`rounded-full px-4 py-2 text-sm font-bold uppercase tracking-wide transition-all ${
-                  tab === t.id
+                className={`rounded-full px-4 py-2 text-sm font-bold uppercase tracking-wide transition-all ${tab === t.id
                     ? "bg-primary text-primary-foreground shadow-[var(--shadow-warm)]"
                     : "bg-card text-foreground hover:bg-secondary"
-                }`}
+                  }`}
               >
                 {t.label}
               </button>
@@ -299,11 +336,11 @@ function Index() {
                   Limpar
                 </button>
                 <button
-                  onClick={handlePrint}
+                  onClick={handleAction}
                   disabled={cart.length === 0}
                   className="rounded-lg bg-primary py-2 text-sm font-black uppercase text-primary-foreground shadow-[var(--shadow-warm)] transition-transform hover:scale-105 disabled:opacity-40 disabled:hover:scale-100"
                 >
-                  🖨 Imprimir
+                  {isCashier ? "🖨 Imprimir" : "🚀 Enviar Pedido"}
                 </button>
               </div>
             </div>
