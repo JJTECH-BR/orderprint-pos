@@ -410,7 +410,7 @@ function Index() {
               Pizzaria 2 Irmãos
             </h1>
             <p className="text-sm font-semibold text-muted-foreground">
-              Catálogo digital - 🕒Terça a Domingo | das 18h às 22h. Faça seu pedido e retire ou receba em casa!
+              Cardápio Digital - 🕒Terça a Domingo | das 18h às 22h. Faça seu pedido e retire ou receba em casa!
             </p>
           </div>
         </div>
