@@ -1,313 +1,817 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import logo from "@/assets/logo.jpeg";
-import { pizzas, pasteis, porcoes, bebidas, sucos, type PizzaSize } from "@/data/menu";
-import { OrderTicket } from "@/components/OrderTicket";
-import { Printer } from "lucide-react";
+import {
+  bebidas,
+  pasteis,
+  pizzas,
+  porcoes,
+  sucos,
+  type PizzaSize,
+} from "@/data/menu";
+import {
+  Bike,
+  CheckCircle2,
+  Copy,
+  CreditCard,
+  MapPin,
+  MessageCircle,
+  Minus,
+  PackageCheck,
+  Plus,
+  ReceiptText,
+  ShoppingCart,
+  Store,
+  Trash2,
+  UserRound,
+} from "lucide-react";
 
 export const Route = createFileRoute("/")({
   component: Index,
   head: () => ({
     meta: [
-      { title: "Pizzaria 2 Irmãos — Cardápio Digital" },
-      { name: "description", content: "Cardápio digital da Pizzaria 2 Irmãos. Pedidos rápidos para o garçom enviar direto à impressora." },
+      { title: "Pizzaria 2 Irmãos - Catálogo Digital" },
+      {
+        name: "description",
+        content: "Catálogo digital para pedidos da Pizzaria 2 Irmãos.",
+      },
     ],
   }),
 });
 
-type CartItem = {
+type Categoria = "pizzas" | "pasteis" | "porcoes" | "bebidas" | "sucos";
+type TipoEntrega = "NO_LOCAL" | "RETIRAR" | "ENTREGAR";
+type FormaPagamento = "PIX" | "Crédito" | "Débito";
+
+export interface ItemCarrinho {
   key: string;
   id: number;
-  name: string;
-  size?: PizzaSize;
-  unitPrice: number;
-  qty: number;
-};
+  nome: string;
+  categoria: Categoria;
+  precoUnitario: number;
+  quantidade: number;
+  tamanho?: PizzaSize;
+  meia?: {
+    saborA: string;
+    saborB: string;
+  };
+}
 
-type Category = "pizzas" | "pasteis" | "porcoes" | "bebidas" | "sucos";
+export interface Pedido {
+  id: string;
+  data: string;
+  origem: string;
+  cliente: {
+    nome: string;
+    endereco: string;
+  };
+  tipoEntrega: TipoEntrega;
+  pagamento: FormaPagamento;
+  itens: ItemCarrinho[];
+  subtotal: number;
+  taxaEntrega: number;
+  total: number;
+  impresso: boolean;
+  observacoes?: string;
+}
 
-const tabs: { id: Category; label: string }[] = [
-  { id: "pizzas", label: "🍕 Pizzas" },
-  { id: "pasteis", label: "🥟 Pastéis" },
-  { id: "porcoes", label: "🍟 Porções" },
-  { id: "bebidas", label: "🥤 Bebidas" },
-  { id: "sucos", label: "🍹 Sucos" },
+const STORAGE_KEY = "pedidos";
+const CLIENT_DRAFT_KEY = "cliente-carrinho-rascunho";
+const PIX_KEY = "84998135262";
+const CASHIER_WHATSAPP = "5584998135262";
+const SUCO_AO_LEITE_ACRESCIMO = 1;
+const tamanhosPizza: PizzaSize[] = ["M", "G", "GG"];
+
+const tabs: { id: Categoria; label: string }[] = [
+  { id: "pizzas", label: "Pizzas" },
+  { id: "pasteis", label: "Pastéis" },
+  { id: "porcoes", label: "Porções" },
+  { id: "bebidas", label: "Bebidas" },
+  { id: "sucos", label: "Sucos" },
 ];
 
+const opcoesEntrega: {
+  value: TipoEntrega;
+  label: string;
+  detalhe: string;
+  taxa: number;
+  icon: typeof Store;
+}[] = [
+    { value: "NO_LOCAL", label: "No Local", detalhe: "Grátis", taxa: 0, icon: Store },
+    { value: "RETIRAR", label: "Retirar", detalhe: "Grátis", taxa: 0, icon: PackageCheck },
+    { value: "ENTREGAR", label: "Entregar", detalhe: "+ R$ 5,00", taxa: 5, icon: Bike },
+  ];
+
+const formasPagamento: FormaPagamento[] = ["PIX", "Crédito", "Débito"];
+
+interface ClienteDraft {
+  tab: Categoria;
+  carrinho: ItemCarrinho[];
+  nome: string;
+  endereco: string;
+  observacoes: string;
+  tipoEntrega: TipoEntrega;
+  formaPagamento: FormaPagamento;
+  meiaTamanho: PizzaSize;
+  meiaSaborA: string;
+  meiaSaborB: string;
+}
+
+const clienteDraftDefault: ClienteDraft = {
+  tab: "pizzas",
+  carrinho: [],
+  nome: "",
+  endereco: "",
+  observacoes: "",
+  tipoEntrega: "NO_LOCAL",
+  formaPagamento: "PIX",
+  meiaTamanho: "G",
+  meiaSaborA: String(pizzas[0]?.id ?? ""),
+  meiaSaborB: String(pizzas[1]?.id ?? ""),
+};
+
+const formatCurrency = (value: number) =>
+  new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  }).format(value);
+
+const lerPedidos = (): Pedido[] => {
+  const raw = localStorage.getItem(STORAGE_KEY);
+  if (!raw) return [];
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? (parsed as Pedido[]) : [];
+  } catch {
+    return [];
+  }
+};
+
+const lerClienteDraft = (): ClienteDraft => {
+  const raw = localStorage.getItem(CLIENT_DRAFT_KEY);
+  if (!raw) return clienteDraftDefault;
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<ClienteDraft>;
+
+    return {
+      ...clienteDraftDefault,
+      ...parsed,
+      carrinho: Array.isArray(parsed.carrinho) ? parsed.carrinho : [],
+    };
+  } catch {
+    return clienteDraftDefault;
+  }
+};
+
+const gerarIdPedido = () =>
+  globalThis.crypto?.randomUUID?.() ??
+  `PED-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
 function Index() {
-  // 1. O estado do Modo Caixa precisa estar AQUI DENTRO, junto com os outros states.
-  const [isCashier, setIsCashier] = useState(() => localStorage.getItem("modoCaixa") === "true");
+  const [rascunhoInicial] = useState(() => lerClienteDraft());
+  const [tab, setTab] = useState<Categoria>(rascunhoInicial.tab);
+  const [carrinho, setCarrinho] = useState<ItemCarrinho[]>(rascunhoInicial.carrinho);
+  const [nome, setNome] = useState(rascunhoInicial.nome);
+  const [endereco, setEndereco] = useState(rascunhoInicial.endereco);
+  const [observacoes, setObservacoes] = useState(rascunhoInicial.observacoes);
+  const [tipoEntrega, setTipoEntrega] = useState<TipoEntrega>(rascunhoInicial.tipoEntrega);
+  const [formaPagamento, setFormaPagamento] = useState<FormaPagamento>(
+    rascunhoInicial.formaPagamento,
+  );
+  const [meiaTamanho, setMeiaTamanho] = useState<PizzaSize>(rascunhoInicial.meiaTamanho);
+  const [meiaSaborA, setMeiaSaborA] = useState(rascunhoInicial.meiaSaborA);
+  const [meiaSaborB, setMeiaSaborB] = useState(rascunhoInicial.meiaSaborB);
+  const [mensagemCarrinho, setMensagemCarrinho] = useState("");
+  const mensagemTimeoutRef = useRef<number | null>(null);
 
-  const [tab, setTab] = useState<Category>("pizzas");
-  const [cart, setCart] = useState<CartItem[]>([]);
-  const [waiter, setWaiter] = useState("");
-  const [table, setTable] = useState("");
-  const [notes, setNotes] = useState("");
-  const [orderNumber, setOrderNumber] = useState<number | null>(null);
+  const subtotal = useMemo(
+    () => carrinho.reduce((total, item) => total + item.precoUnitario * item.quantidade, 0),
+    [carrinho],
+  );
 
-  const total = useMemo(() => cart.reduce((s, i) => s + i.unitPrice * i.qty, 0), [cart]);
+  const taxaEntrega = opcoesEntrega.find((opcao) => opcao.value === tipoEntrega)?.taxa ?? 0;
+  const total = subtotal + taxaEntrega;
+  const enderecoObrigatorio = tipoEntrega === "ENTREGAR";
+  const dadosConferenciaOk =
+    carrinho.length > 0 && nome.trim().length > 0 && (!enderecoObrigatorio || endereco.trim().length > 0);
 
-  // 2. A função que altera o Modo Caixa também fica aqui dentro
-  const toggleCashier = () => {
-    const newState = !isCashier;
-    setIsCashier(newState);
-    localStorage.setItem("modoCaixa", String(newState));
+  useEffect(() => {
+    const draft: ClienteDraft = {
+      tab,
+      carrinho,
+      nome,
+      endereco,
+      observacoes,
+      tipoEntrega,
+      formaPagamento,
+      meiaTamanho,
+      meiaSaborA,
+      meiaSaborB,
+    };
+
+    localStorage.setItem(CLIENT_DRAFT_KEY, JSON.stringify(draft));
+  }, [
+    carrinho,
+    endereco,
+    formaPagamento,
+    meiaSaborA,
+    meiaSaborB,
+    meiaTamanho,
+    nome,
+    observacoes,
+    tab,
+    tipoEntrega,
+  ]);
+
+  const mostrarMensagem = (mensagem: string) => {
+    setMensagemCarrinho(mensagem);
+
+    if (mensagemTimeoutRef.current) {
+      window.clearTimeout(mensagemTimeoutRef.current);
+    }
+
+    mensagemTimeoutRef.current = window.setTimeout(() => {
+      setMensagemCarrinho("");
+      mensagemTimeoutRef.current = null;
+    }, 1800);
   };
 
-  const addItem = (item: Omit<CartItem, "qty" | "key"> & { key: string }) => {
-    setCart((prev) => {
-      const found = prev.find((p) => p.key === item.key);
-      if (found) return prev.map((p) => (p.key === item.key ? { ...p, qty: p.qty + 1 } : p));
-      return [...prev, { ...item, qty: 1 }];
-    });
+  const avisarItemAdicionado = (nomeItem: string) => {
+    mostrarMensagem(`${nomeItem} adicionado ao carrinho.`);
   };
 
-  const updateQty = (key: string, delta: number) => {
-    setCart((prev) =>
-      prev
-        .map((p) => (p.key === key ? { ...p, qty: p.qty + delta } : p))
-        .filter((p) => p.qty > 0),
-    );
-  };
+  const itensResumoWhatsApp = useMemo(() => {
+    if (carrinho.length === 0) return "Nenhum item informado";
 
-  const removeItem = (key: string) =>
-    setCart((prev) => prev.filter((p) => p.key !== key));
+    return carrinho
+      .map(
+        (item) =>
+          `${item.quantidade}x ${item.nome}${item.tamanho ? ` (${item.tamanho})` : ""} - ${formatCurrency(
+            item.precoUnitario * item.quantidade,
+          )}`,
+      )
+      .join("\n");
+  }, [carrinho]);
 
-  const clearCart = () => {
-    setCart([]);
-    setNotes("");
-  };
+  const mensagemWhatsApp = useMemo(() => {
+    const entregaSelecionada =
+      opcoesEntrega.find((opcao) => opcao.value === tipoEntrega)?.label ?? "Não informado";
 
-  // 3. O botão de Enviar/Imprimir agora sabe se é Garçom ou Caixa
-  const handleAction = () => {
-    if (cart.length === 0) return;
-    if (!table.trim()) {
-      alert("Informe o número da mesa antes de enviar para a impressora.");
+    return [
+      "Olá, caixa da Pizzaria 2 Irmãos!",
+      "Segue meu comprovante de PIX para conferência do pedido.",
+      "",
+      `Cliente: ${nome.trim() || "Não informado"}`,
+      `Entrega: ${entregaSelecionada}`,
+      `Endereço: ${endereco.trim() || "Não informado"}`,
+      `Pagamento: PIX`,
+      `Subtotal: ${formatCurrency(subtotal)}`,
+      `Taxa de entrega: ${formatCurrency(taxaEntrega)}`,
+      `Total pago: ${formatCurrency(total)}`,
+      "",
+      "Itens do pedido:",
+      itensResumoWhatsApp,
+      observacoes.trim() ? `\nObservações: ${observacoes.trim()}` : "",
+      "",
+      `Por favor, confirme que o cliente ${nome.trim() || "informado acima"} pagou e pode preparar o pedido dele.`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }, [endereco, itensResumoWhatsApp, nome, observacoes, subtotal, taxaEntrega, tipoEntrega, total]);
+
+  const whatsappLink = `https://wa.me/${CASHIER_WHATSAPP}?text=${encodeURIComponent(
+    mensagemWhatsApp,
+  )}`;
+
+  const copiarPix = () => {
+    if (!("clipboard" in navigator)) {
+      alert(`Não foi possível copiar automaticamente. Chave PIX: ${PIX_KEY}`);
       return;
     }
 
-    const num = Math.floor(Date.now() / 1000) % 10000;
-    setOrderNumber(num);
+    void navigator.clipboard
+      .writeText(PIX_KEY)
+      .then(() => mostrarMensagem("Chave PIX copiada."))
+      .catch(() => alert(`Não foi possível copiar automaticamente. Chave PIX: ${PIX_KEY}`));
+  };
 
-    if (isCashier) {
-      // Se for o computador do Caixa, ele imprime direto o que montou na tela dele
-      setTimeout(() => {
-        window.print();
-        clearCart(); // Limpa depois de imprimir
-      }, 100);
-    } else {
-      // Se for o Garçom, ele não tenta imprimir. Apenas "envia" (futuramente para o Firebase)
-      alert("Pedido enviado para o Caixa! (Aguardando integração com Firebase)");
-      clearCart();
+  const abrirWhatsAppComprovante = () => {
+    if (!dadosConferenciaOk) {
+      alert("Preencha nome, carrinho e endereço quando for entrega antes de enviar o comprovante.");
+      return;
     }
+
+    window.open(whatsappLink, "_blank", "noopener,noreferrer");
+  };
+
+  const adicionarItem = (item: Omit<ItemCarrinho, "quantidade">) => {
+    setCarrinho((itensAtuais) => {
+      const existente = itensAtuais.find((itemAtual) => itemAtual.key === item.key);
+      if (!existente) return [...itensAtuais, { ...item, quantidade: 1 }];
+
+      return itensAtuais.map((itemAtual) =>
+        itemAtual.key === item.key
+          ? { ...itemAtual, quantidade: itemAtual.quantidade + 1 }
+          : itemAtual,
+      );
+    });
+    avisarItemAdicionado(item.nome);
+  };
+
+  const alterarQuantidade = (key: string, delta: number) => {
+    setCarrinho((itensAtuais) =>
+      itensAtuais
+        .map((item) =>
+          item.key === key ? { ...item, quantidade: item.quantidade + delta } : item,
+        )
+        .filter((item) => item.quantidade > 0),
+    );
+  };
+
+  const removerItem = (key: string) => {
+    setCarrinho((itensAtuais) => itensAtuais.filter((item) => item.key !== key));
+  };
+
+  const adicionarPizzaMeia = () => {
+    const saborA = pizzas.find((pizza) => String(pizza.id) === meiaSaborA);
+    const saborB = pizzas.find((pizza) => String(pizza.id) === meiaSaborB);
+
+    if (!saborA || !saborB) {
+      alert("Escolha os dois sabores da pizza meia a meia.");
+      return;
+    }
+
+    adicionarItem({
+      key: `pizza-meia-${meiaTamanho}-${saborA.id}-${saborB.id}`,
+      id: saborA.id,
+      nome: `Pizza meia ${saborA.name} / ${saborB.name}`,
+      categoria: "pizzas",
+      tamanho: meiaTamanho,
+      precoUnitario: Math.max(saborA.prices[meiaTamanho], saborB.prices[meiaTamanho]),
+      meia: {
+        saborA: saborA.name,
+        saborB: saborB.name,
+      },
+    });
+  };
+
+  const finalizarPedido = () => {
+    if (carrinho.length === 0) {
+      alert("Adicione pelo menos um item ao carrinho.");
+      return;
+    }
+
+    if (!dadosConferenciaOk) {
+      alert("Preencha os dados para conferência antes de finalizar o pedido.");
+      return;
+    }
+
+    const entregaSelecionada = opcoesEntrega.find((opcao) => opcao.value === tipoEntrega);
+    const pedido: Pedido = {
+      id: gerarIdPedido(),
+      data: new Date().toISOString(),
+      origem: entregaSelecionada?.label ?? "Cliente",
+      cliente: {
+        nome: nome.trim(),
+        endereco: endereco.trim(),
+      },
+      tipoEntrega,
+      pagamento: formaPagamento,
+      itens: carrinho,
+      subtotal,
+      taxaEntrega,
+      total,
+      impresso: false,
+      observacoes: observacoes.trim() || undefined,
+    };
+
+    localStorage.setItem(STORAGE_KEY, JSON.stringify([pedido, ...lerPedidos()]));
+    window.dispatchEvent(new Event("storage"));
+
+    localStorage.removeItem(CLIENT_DRAFT_KEY);
+    setCarrinho([]);
+    setObservacoes("");
+    alert("Pedido enviado para o caixa.");
   };
 
   return (
     <div className="min-h-screen bg-background">
-      {/* HEADER */}
-      <header className="no-print sticky top-0 z-30 border-b-4 border-primary bg-card shadow-[var(--shadow-card)]">
-        <div className="mx-auto flex max-w-7xl items-center gap-4 px-4 py-3">
-          <img src={logo} alt="Pizzaria 2 Irmãos" className="h-16 w-16 rounded-full object-cover ring-4 ring-secondary" />
+      <header className="sticky top-0 z-30 border-b border-border bg-card/95 shadow-[var(--shadow-card)] backdrop-blur">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-3 px-4 py-3">
+          <img
+            src={logo}
+            alt="Pizzaria 2 Irmãos"
+            className="h-14 w-14 rounded-lg object-cover ring-2 ring-secondary"
+          />
           <div className="flex-1">
-            <h1 className="text-2xl font-black uppercase tracking-tight text-primary md:text-3xl">
+            <h1 className="text-2xl font-black uppercase text-primary md:text-3xl">
               Pizzaria 2 Irmãos
             </h1>
-            <p className="text-xs font-medium text-muted-foreground md:text-sm">
-              Cardápio do garçom · Terça a Domingo · 18h às 22h
+            <p className="text-sm font-semibold text-muted-foreground">
+              Catálogo digital - 🕒Terça a Domingo | das 18h às 22h. Faça seu pedido e retire ou receba em casa!
             </p>
-          </div>
-
-          {/* Botão de Modo Caixa (Apenas Visível em Telas Médias/Grandes para não poluir o celular) */}
-          <button
-            onClick={toggleCashier}
-            className={`hidden md:flex items-center gap-2 rounded-lg border-2 px-3 py-2 text-sm font-bold transition-all ${isCashier
-                ? "border-green-500 bg-green-100 text-green-700"
-                : "border-border bg-card text-muted-foreground"
-              }`}
-          >
-            <Printer size={18} />
-            {isCashier ? "Caixa Ativo" : "Modo Garçom"}
-          </button>
-
-          <div className="hidden items-center gap-2 md:flex">
-            <input
-              value={waiter}
-              onChange={(e) => setWaiter(e.target.value)}
-              placeholder="Garçom"
-              className="w-28 rounded-lg border-2 border-border bg-background px-3 py-2 text-sm font-medium focus:border-primary focus:outline-none"
-            />
-            <input
-              value={table}
-              onChange={(e) => setTable(e.target.value)}
-              placeholder="Mesa"
-              className="w-20 rounded-lg border-2 border-primary bg-secondary px-3 py-2 text-center text-sm font-bold focus:outline-none"
-            />
           </div>
         </div>
       </header>
 
+      {mensagemCarrinho && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed right-4 top-24 z-50 flex max-w-[calc(100vw-2rem)] items-center gap-2 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm font-black text-green-800 shadow-[var(--shadow-card)]"
+        >
+          <CheckCircle2 size={18} aria-hidden="true" />
+          {mensagemCarrinho}
+        </div>
+      )}
+
       <div className="mx-auto grid max-w-7xl gap-6 px-4 py-6 lg:grid-cols-[1fr_400px]">
-        {/* MENU */}
-        <main className="no-print">
-          {/* Mobile waiter/table */}
-          <div className="mb-4 flex gap-2 md:hidden">
-            <input
-              value={waiter}
-              onChange={(e) => setWaiter(e.target.value)}
-              placeholder="Garçom"
-              className="flex-1 rounded-lg border-2 border-border bg-card px-3 py-2 text-sm font-medium"
-            />
-            <input
-              value={table}
-              onChange={(e) => setTable(e.target.value)}
-              placeholder="Mesa"
-              className="w-24 rounded-lg border-2 border-primary bg-secondary px-3 py-2 text-center text-sm font-bold"
-            />
-          </div>
+        <main className="space-y-5">
+          <section className="rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-card)]">
+            <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
+              <label className="space-y-2">
+                <span className="flex items-center gap-2 text-sm font-bold text-foreground">
+                  <UserRound size={16} aria-hidden="true" />
+                  Nome
+                </span>
+                <input
+                  value={nome}
+                  onChange={(event) => setNome(event.target.value)}
+                  className="h-11 w-full rounded-lg border border-border bg-background px-3 text-sm font-semibold outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/10"
+                  placeholder="Seu nome"
+                />
+              </label>
 
-          {/* Tabs */}
-          <div className="mb-5 flex flex-wrap gap-2">
-            {tabs.map((t) => (
-              <button
-                key={t.id}
-                onClick={() => setTab(t.id)}
-                className={`rounded-full px-4 py-2 text-sm font-bold uppercase tracking-wide transition-all ${tab === t.id
-                    ? "bg-primary text-primary-foreground shadow-[var(--shadow-warm)]"
-                    : "bg-card text-foreground hover:bg-secondary"
-                  }`}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
+              <label className="space-y-2">
+                <span className="flex items-center gap-2 text-sm font-bold text-foreground">
+                  <MapPin size={16} aria-hidden="true" />
+                  Endereço
+                </span>
+                <input
+                  value={endereco}
+                  onChange={(event) => setEndereco(event.target.value)}
+                  className="h-11 w-full rounded-lg border border-border bg-background px-3 text-sm font-semibold outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/10"
+                  placeholder="Rua, número, bairro"
+                />
+              </label>
 
-          {tab === "pizzas" && (
-            <div className="grid gap-3">
-              {pizzas.map((p) => (
-                <div key={p.id} className="rounded-2xl border-2 border-border bg-card p-4 shadow-[var(--shadow-card)] transition-all hover:border-primary">
-                  <div className="mb-1 flex items-baseline justify-between gap-2">
-                    <h3 className="text-lg font-extrabold text-foreground">
-                      <span className="mr-2 text-primary">{String(p.id).padStart(2, "0")}.</span>
-                      {p.name}
-                    </h3>
-                  </div>
-                  <p className="mb-2 text-xs italic text-muted-foreground">{p.description}</p>
-                  {p.highlight && (
-                    <p className="mb-3 text-xs font-bold text-primary">★ {p.highlight}</p>
-                  )}
-                  <div className="grid grid-cols-3 gap-2">
-                    {(["M", "G", "GG"] as PizzaSize[]).map((size) => (
-                      <button
-                        key={size}
-                        onClick={() =>
-                          addItem({
-                            key: `pizza-${p.id}-${size}`,
-                            id: p.id,
-                            name: `Pizza ${p.name}`,
-                            size,
-                            unitPrice: p.prices[size],
-                          })
-                        }
-                        className="group flex flex-col items-center rounded-xl border-2 border-secondary bg-[var(--gradient-warm)] py-2 transition-all hover:border-primary hover:shadow-[var(--shadow-warm)]"
-                      >
-                        <span className="text-xs font-black text-primary">{size}</span>
-                        <span className="text-sm font-bold text-foreground">
-                          R$ {p.prices[size].toFixed(2)}
-                        </span>
-                        <span className="text-[10px] font-semibold uppercase text-muted-foreground group-hover:text-primary">
-                          + Add
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {tab !== "pizzas" && (
-            <div className="grid gap-3 sm:grid-cols-2">
-              {(tab === "pasteis" ? pasteis : tab === "porcoes" ? porcoes : tab === "bebidas" ? bebidas : sucos).map((it) => (
-                <button
-                  key={it.id}
-                  onClick={() =>
-                    addItem({
-                      key: `${tab}-${it.id}`,
-                      id: it.id,
-                      name: it.name,
-                      unitPrice: it.price,
-                    })
-                  }
-                  className="flex items-center justify-between rounded-2xl border-2 border-border bg-card p-4 text-left shadow-[var(--shadow-card)] transition-all hover:border-primary hover:shadow-[var(--shadow-warm)]"
+              <label className="space-y-2">
+                <span className="flex items-center gap-2 text-sm font-bold text-foreground">
+                  <CreditCard size={16} aria-hidden="true" />
+                  Pagamento
+                </span>
+                <select
+                  value={formaPagamento}
+                  onChange={(event) => setFormaPagamento(event.target.value as FormaPagamento)}
+                  className="h-11 w-full rounded-lg border border-border bg-background px-3 text-sm font-bold outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/10 md:w-36"
                 >
-                  <div>
-                    <h3 className="font-extrabold text-foreground">
-                      <span className="mr-2 text-primary">{it.id}.</span>
-                      {it.name}
-                    </h3>
-                    <span className="text-xs font-semibold uppercase text-muted-foreground">Toque para adicionar</span>
-                  </div>
-                  <span className="rounded-lg bg-secondary px-3 py-1 text-base font-black text-primary">
-                    R$ {it.price.toFixed(2)}
-                  </span>
+                  {formasPagamento.map((forma) => (
+                    <option key={forma} value={forma}>
+                      {forma}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <div className="mt-4 grid gap-2 sm:grid-cols-3">
+              {opcoesEntrega.map((opcao) => {
+                const Icon = opcao.icon;
+                const selecionado = tipoEntrega === opcao.value;
+
+                return (
+                  <button
+                    key={opcao.value}
+                    type="button"
+                    onClick={() => setTipoEntrega(opcao.value)}
+                    className={`flex items-center justify-between rounded-lg border-2 p-3 text-left transition ${selecionado
+                      ? "border-primary bg-primary text-primary-foreground shadow-[var(--shadow-warm)]"
+                      : "border-border bg-background text-foreground hover:border-primary"
+                      }`}
+                  >
+                    <span className="flex items-center gap-3">
+                      <Icon size={20} aria-hidden="true" />
+                      <span>
+                        <span className="block text-sm font-black">{opcao.label}</span>
+                        <span
+                          className={`block text-xs font-semibold ${selecionado ? "text-primary-foreground/85" : "text-muted-foreground"
+                            }`}
+                        >
+                          {opcao.detalhe}
+                        </span>
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-card)]">
+            <div className="mb-4 flex flex-wrap gap-2">
+              {tabs.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setTab(item.id)}
+                  className={`rounded-lg px-4 py-2 text-sm font-black uppercase transition ${tab === item.id
+                    ? "bg-primary text-primary-foreground shadow-[var(--shadow-warm)]"
+                    : "bg-background text-foreground hover:bg-secondary"
+                    }`}
+                >
+                  {item.label}
                 </button>
               ))}
             </div>
-          )}
+
+            {tab === "pizzas" && (
+              <div className="grid gap-3">
+                <div className="rounded-lg border-2 border-dashed border-primary/45 bg-background p-4">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div>
+                      <h2 className="text-lg font-black text-foreground">Pizza meia a meia</h2>
+                      <p className="text-sm font-medium text-muted-foreground">
+                        O valor usa o maior preço entre os sabores escolhidos.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-[120px_1fr_1fr_auto]">
+                    <select
+                      value={meiaTamanho}
+                      onChange={(event) => setMeiaTamanho(event.target.value as PizzaSize)}
+                      className="h-11 rounded-lg border border-border bg-card px-3 text-sm font-black outline-none focus:border-primary"
+                    >
+                      {tamanhosPizza.map((tamanho) => (
+                        <option key={tamanho} value={tamanho}>
+                          {tamanho}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={meiaSaborA}
+                      onChange={(event) => setMeiaSaborA(event.target.value)}
+                      className="h-11 rounded-lg border border-border bg-card px-3 text-sm font-bold outline-none focus:border-primary"
+                    >
+                      {pizzas.map((pizza) => (
+                        <option key={pizza.id} value={pizza.id}>
+                          {pizza.name}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={meiaSaborB}
+                      onChange={(event) => setMeiaSaborB(event.target.value)}
+                      className="h-11 rounded-lg border border-border bg-card px-3 text-sm font-bold outline-none focus:border-primary"
+                    >
+                      {pizzas.map((pizza) => (
+                        <option key={pizza.id} value={pizza.id}>
+                          {pizza.name}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={adicionarPizzaMeia}
+                      className="flex h-11 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-black uppercase text-primary-foreground transition hover:bg-[var(--brand-red-dark)]"
+                    >
+                      <Plus size={17} aria-hidden="true" />
+                      Add
+                    </button>
+                  </div>
+                </div>
+
+                {pizzas.map((pizza) => (
+                  <article
+                    key={pizza.id}
+                    className="rounded-lg border border-border bg-background p-4 transition hover:border-primary hover:shadow-[var(--shadow-card)]"
+                  >
+                    <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <h3 className="text-lg font-black text-foreground">
+                          <span className="mr-2 text-primary">
+                            {String(pizza.id).padStart(2, "0")}.
+                          </span>
+                          {pizza.name}
+                        </h3>
+                        <p className="mt-1 text-sm font-medium text-muted-foreground">
+                          {pizza.description}
+                        </p>
+                        {pizza.highlight && (
+                          <p className="mt-2 text-xs font-black uppercase text-primary">
+                            {pizza.highlight}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2">
+                      {tamanhosPizza.map((tamanho) => (
+                        <button
+                          key={tamanho}
+                          type="button"
+                          onClick={() =>
+                            adicionarItem({
+                              key: `pizza-${pizza.id}-${tamanho}`,
+                              id: pizza.id,
+                              nome: `Pizza ${pizza.name}`,
+                              categoria: "pizzas",
+                              tamanho,
+                              precoUnitario: pizza.prices[tamanho],
+                            })
+                          }
+                          className="rounded-lg border-2 border-secondary bg-card px-3 py-2 text-center transition hover:border-primary hover:bg-secondary"
+                        >
+                          <span className="block text-xs font-black text-primary">{tamanho}</span>
+                          <span className="block text-sm font-black text-foreground">
+                            {formatCurrency(pizza.prices[tamanho])}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+
+            {tab !== "pizzas" && (
+              <div className="grid gap-3 sm:grid-cols-2">
+                {(tab === "pasteis"
+                  ? pasteis
+                  : tab === "porcoes"
+                    ? porcoes
+                    : tab === "bebidas"
+                      ? bebidas
+                      : sucos
+                ).map((item) =>
+                  tab === "sucos" ? (
+                    <article
+                      key={item.id}
+                      className="rounded-lg border border-border bg-background p-4 transition hover:border-primary hover:shadow-[var(--shadow-card)]"
+                    >
+                      <div className="mb-3">
+                        <h3 className="text-base font-black text-foreground">
+                          <span className="mr-2 text-primary">{item.id}.</span>
+                          {item.name}
+                        </h3>
+                        <p className="text-xs font-semibold text-muted-foreground">
+                          Ao leite tem acréscimo de {formatCurrency(SUCO_AO_LEITE_ACRESCIMO)}.
+                        </p>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            adicionarItem({
+                              key: `sucos-${item.id}-natural`,
+                              id: item.id,
+                              nome: `Suco ${item.name}`,
+                              categoria: "sucos",
+                              precoUnitario: item.price,
+                            })
+                          }
+                          className="rounded-lg border border-secondary bg-card px-3 py-2 text-left transition hover:border-primary hover:bg-secondary"
+                        >
+                          <span className="block text-xs font-black uppercase text-muted-foreground">
+                            Natural
+                          </span>
+                          <span className="block text-sm font-black text-foreground">
+                            {formatCurrency(item.price)}
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            adicionarItem({
+                              key: `sucos-${item.id}-ao-leite`,
+                              id: item.id,
+                              nome: `Suco ${item.name} ao leite`,
+                              categoria: "sucos",
+                              precoUnitario: item.price + SUCO_AO_LEITE_ACRESCIMO,
+                            })
+                          }
+                          className="rounded-lg border border-primary bg-secondary px-3 py-2 text-left transition hover:border-primary hover:bg-[var(--brand-yellow-light)]"
+                        >
+                          <span className="block text-xs font-black uppercase text-primary">
+                            Ao leite
+                          </span>
+                          <span className="block text-sm font-black text-foreground">
+                            {formatCurrency(item.price + SUCO_AO_LEITE_ACRESCIMO)}
+                          </span>
+                        </button>
+                      </div>
+                    </article>
+                  ) : (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() =>
+                        adicionarItem({
+                          key: `${tab}-${item.id}`,
+                          id: item.id,
+                          nome: item.name,
+                          categoria: tab,
+                          precoUnitario: item.price,
+                        })
+                      }
+                      className="flex items-center justify-between gap-4 rounded-lg border border-border bg-background p-4 text-left transition hover:border-primary hover:shadow-[var(--shadow-card)]"
+                    >
+                      <span>
+                        <span className="block text-base font-black text-foreground">
+                          <span className="mr-2 text-primary">{item.id}.</span>
+                          {item.name}
+                        </span>
+                        {item.description && (
+                          <span className="mt-1 block text-xs font-medium text-muted-foreground">
+                            {item.description}
+                          </span>
+                        )}
+                      </span>
+                      <span className="shrink-0 rounded-lg bg-secondary px-3 py-2 text-sm font-black text-secondary-foreground">
+                        {formatCurrency(item.price)}
+                      </span>
+                    </button>
+                  ),
+                )}
+              </div>
+            )}
+          </section>
         </main>
 
-        {/* CART */}
-        <aside className="no-print lg:sticky lg:top-28 lg:h-[calc(100vh-8rem)]">
-          <div className="flex h-full flex-col rounded-2xl border-4 border-primary bg-card shadow-[var(--shadow-warm)]">
-            <div className="rounded-t-xl bg-primary px-4 py-3">
-              <h2 className="text-lg font-black uppercase tracking-wide text-primary-foreground">
-                🧾 Pedido {table && `· Mesa ${table}`}
+        <aside className="lg:sticky lg:top-24 lg:self-start">
+          <section className="flex flex-col rounded-lg border-2 border-primary bg-card shadow-[var(--shadow-warm)]">
+            <div className="flex items-center justify-between gap-3 border-b border-border bg-primary px-4 py-3 text-primary-foreground">
+              <h2 className="flex items-center gap-2 text-lg font-black uppercase">
+                <ShoppingCart size={20} aria-hidden="true" />
+                Carrinho
               </h2>
+              <span className="rounded-lg bg-primary-foreground/15 px-3 py-1 text-sm font-black">
+                {carrinho.reduce((totalItens, item) => totalItens + item.quantidade, 0)} itens
+              </span>
             </div>
-            <div className="flex-1 overflow-y-auto p-3">
-              {cart.length === 0 ? (
-                <p className="py-12 text-center text-sm text-muted-foreground">
-                  Nenhum item adicionado.<br />Toque nos itens do cardápio.
-                </p>
+
+            <div className="p-2 sm:p-3">
+              {carrinho.length === 0 ? (
+                <div className="grid min-h-44 place-items-center rounded-lg border border-dashed border-border bg-background px-6 text-center">
+                  <p className="text-sm font-semibold text-muted-foreground">
+                    Seu carrinho está vazio.
+                  </p>
+                </div>
               ) : (
                 <ul className="space-y-2">
-                  {cart.map((i) => (
-                    <li key={i.key} className="rounded-lg border border-border bg-background p-2">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex-1">
-                          <p className="text-sm font-bold text-foreground">
-                            {i.name} {i.size && <span className="text-primary">({i.size})</span>}
+                  {carrinho.map((item) => (
+                    <li key={item.key} className="rounded-lg border border-border bg-background p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-black text-foreground">
+                            {item.nome}
+                            {item.tamanho && (
+                              <span className="ml-2 text-primary">({item.tamanho})</span>
+                            )}
                           </p>
-                          <p className="text-xs text-muted-foreground">
-                            R$ {i.unitPrice.toFixed(2)} cada
+                          <p className="text-xs font-semibold text-muted-foreground">
+                            {formatCurrency(item.precoUnitario)} cada
                           </p>
                         </div>
                         <button
-                          onClick={() => removeItem(i.key)}
-                          className="text-xs font-bold text-destructive hover:underline"
+                          type="button"
+                          onClick={() => removerItem(item.key)}
+                          className="rounded-md p-1 text-destructive transition hover:bg-destructive/10"
+                          aria-label={`Remover ${item.nome}`}
                         >
-                          ✕
+                          <Trash2 size={16} aria-hidden="true" />
                         </button>
                       </div>
-                      <div className="mt-2 flex items-center justify-between">
+
+                      <div className="mt-3 flex items-center justify-between">
                         <div className="flex items-center gap-2">
                           <button
-                            onClick={() => updateQty(i.key, -1)}
-                            className="h-7 w-7 rounded-full bg-secondary font-black text-primary"
+                            type="button"
+                            onClick={() => alterarQuantidade(item.key, -1)}
+                            className="grid h-8 w-8 place-items-center rounded-lg bg-secondary font-black text-secondary-foreground transition hover:bg-primary hover:text-primary-foreground"
+                            aria-label={`Diminuir ${item.nome}`}
                           >
-                            −
+                            <Minus size={16} aria-hidden="true" />
                           </button>
-                          <span className="w-6 text-center text-sm font-black">{i.qty}</span>
+                          <span className="w-7 text-center text-sm font-black">
+                            {item.quantidade}
+                          </span>
                           <button
-                            onClick={() => updateQty(i.key, 1)}
-                            className="h-7 w-7 rounded-full bg-primary font-black text-primary-foreground"
+                            type="button"
+                            onClick={() => alterarQuantidade(item.key, 1)}
+                            className="grid h-8 w-8 place-items-center rounded-lg bg-primary font-black text-primary-foreground transition hover:bg-[var(--brand-red-dark)]"
+                            aria-label={`Aumentar ${item.nome}`}
                           >
-                            +
+                            <Plus size={16} aria-hidden="true" />
                           </button>
                         </div>
-                        <span className="text-sm font-black text-primary">
-                          R$ {(i.unitPrice * i.qty).toFixed(2)}
-                        </span>
+                        <strong className="text-sm font-black text-primary">
+                          {formatCurrency(item.precoUnitario * item.quantidade)}
+                        </strong>
                       </div>
                     </li>
                   ))}
@@ -315,48 +819,98 @@ function Index() {
               )}
             </div>
 
-            <div className="border-t-2 border-border p-3">
-              <textarea
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="Observações (sem cebola, ponto da carne…)"
-                className="mb-3 w-full resize-none rounded-lg border-2 border-border bg-background p-2 text-xs focus:border-primary focus:outline-none"
-                rows={2}
-              />
-              <div className="mb-3 flex items-center justify-between">
-                <span className="text-sm font-bold uppercase text-muted-foreground">Total</span>
-                <span className="text-2xl font-black text-primary">R$ {total.toFixed(2)}</span>
+            <div className="border-t border-border p-3">
+              <label className="mb-3 block space-y-2">
+                <span className="text-sm font-bold text-foreground">Observações</span>
+                <textarea
+                  value={observacoes}
+                  onChange={(event) => setObservacoes(event.target.value)}
+                  rows={3}
+                  className="w-full resize-none rounded-lg border border-border bg-background p-3 text-sm outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/10"
+                  placeholder="Ex.: sem cebola, pouco orégano, troco para R$ 100"
+                />
+              </label>
+
+              {formaPagamento === "PIX" && (
+                <div className="mb-3 rounded-lg border border-green-200 bg-green-50 p-3 text-green-950">
+                  <div className="mb-2 flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-black uppercase text-green-800">Pagamento PIX</p>
+                      <p className="text-xs font-semibold text-green-700">
+                        Copie a chave e envie o comprovante para o caixa conferir.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 rounded-lg border border-green-200 bg-white p-2">
+                    <code className="flex-1 break-all text-sm font-black text-green-900">
+                      {PIX_KEY}
+                    </code>
+                    <button
+                      type="button"
+                      onClick={copiarPix}
+                      className="flex h-9 items-center gap-2 rounded-lg bg-green-700 px-3 text-xs font-black uppercase text-white transition hover:bg-green-800"
+                    >
+                      <Copy size={15} aria-hidden="true" />
+                      Copiar
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={abrirWhatsAppComprovante}
+                    disabled={!dadosConferenciaOk}
+                    className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-[#25D366] px-3 text-sm font-black uppercase text-white transition hover:bg-[#1fb458] disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    <MessageCircle size={17} aria-hidden="true" />
+                    Enviar comprovante
+                  </button>
+                  {!dadosConferenciaOk && (
+                    <p className="mt-2 text-xs font-semibold text-green-800">
+                      Preencha nome, carrinho e endereço quando for entrega para liberar o envio.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <div className="space-y-2 rounded-lg bg-background p-3">
+                <div className="flex justify-between text-sm font-bold text-muted-foreground">
+                  <span>Subtotal</span>
+                  <span>{formatCurrency(subtotal)}</span>
+                </div>
+                <div className="flex justify-between text-sm font-bold text-muted-foreground">
+                  <span>Entrega</span>
+                  <span>{formatCurrency(taxaEntrega)}</span>
+                </div>
+                <div className="flex justify-between border-t border-border pt-2 text-xl font-black text-primary">
+                  <span>Total</span>
+                  <span>{formatCurrency(total)}</span>
+                </div>
               </div>
-              <div className="grid grid-cols-2 gap-2">
+
+              <div className="mt-3 grid grid-cols-2 gap-2">
                 <button
-                  onClick={clearCart}
-                  disabled={cart.length === 0}
-                  className="rounded-lg border-2 border-border bg-background py-2 text-sm font-bold uppercase text-foreground disabled:opacity-40"
+                  type="button"
+                  onClick={() => setCarrinho([])}
+                  disabled={carrinho.length === 0}
+                  className="rounded-lg border border-border bg-background py-3 text-sm font-black uppercase text-foreground transition hover:border-primary disabled:cursor-not-allowed disabled:opacity-45"
                 >
                   Limpar
                 </button>
                 <button
-                  onClick={handleAction}
-                  disabled={cart.length === 0}
-                  className="rounded-lg bg-primary py-2 text-sm font-black uppercase text-primary-foreground shadow-[var(--shadow-warm)] transition-transform hover:scale-105 disabled:opacity-40 disabled:hover:scale-100"
+                  type="button"
+                  onClick={finalizarPedido}
+                  disabled={!dadosConferenciaOk}
+                  className="flex items-center justify-center gap-2 rounded-lg bg-primary py-3 text-sm font-black uppercase text-primary-foreground shadow-[var(--shadow-warm)] transition hover:bg-[var(--brand-red-dark)] disabled:cursor-not-allowed disabled:opacity-45"
                 >
-                  {isCashier ? "🖨 Imprimir" : "🚀 Enviar Pedido"}
+                  <ReceiptText size={17} aria-hidden="true" />
+                  Finalizar
                 </button>
               </div>
             </div>
-          </div>
+          </section>
         </aside>
       </div>
-
-      {/* PRINT-ONLY TICKET */}
-      <OrderTicket
-        items={cart}
-        total={total}
-        waiter={waiter}
-        table={table}
-        notes={notes}
-        orderNumber={orderNumber ?? 0}
-      />
     </div>
   );
 }
