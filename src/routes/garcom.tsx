@@ -138,6 +138,10 @@ function GarcomPage() {
   const [meiaSaborA, setMeiaSaborA] = useState(rascunhoInicial.meiaSaborA);
   const [meiaSaborB, setMeiaSaborB] = useState(rascunhoInicial.meiaSaborB);
   const [mensagemCarrinho, setMensagemCarrinho] = useState("");
+
+  // 1. ESTADO DO MODAL ADICIONADO AQUI
+  const [modalSucessoAberto, setModalSucessoAberto] = useState(false);
+
   const mensagemTimeoutRef = useRef<number | null>(null);
 
   const subtotal = useMemo(
@@ -178,10 +182,10 @@ function GarcomPage() {
       const existente = estadoAtual.carrinho.find((itemAtual) => itemAtual.key === item.key);
       const carrinho = existente
         ? estadoAtual.carrinho.map((itemAtual) =>
-            itemAtual.key === item.key
-              ? { ...itemAtual, quantidade: itemAtual.quantidade + 1 }
-              : itemAtual,
-          )
+          itemAtual.key === item.key
+            ? { ...itemAtual, quantidade: itemAtual.quantidade + 1 }
+            : itemAtual,
+        )
         : [...estadoAtual.carrinho, { ...item, quantidade: 1 }];
 
       return { ...estadoAtual, carrinho };
@@ -273,8 +277,15 @@ function GarcomPage() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify([pedidoMesa, ...lerPedidos()]));
     window.dispatchEvent(new Event("storage"));
     localStorage.removeItem(GARCOM_DRAFT_KEY);
+
+    // Guardamos o número da mesa antes de limpar para mostrar no modal
+    const mesaFinalizada = pedido.numeroMesa.trim();
+
     limparPedido();
-    alert("Pedido enviado para o caixa.");
+
+    // 2. ABRE O MODAL EM VEZ DO ALERT
+    // alert("Pedido enviado para o caixa.");
+    setModalSucessoAberto(true);
   };
 
   return (
@@ -656,6 +667,31 @@ function GarcomPage() {
           </section>
         </aside>
       </div>
+
+      {/* 3. NOVO: MODAL DE SUCESSO DO GARÇOM AQUI */}
+      {modalSucessoAberto && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm transition-opacity">
+          <div className="w-full max-w-sm animate-in fade-in zoom-in-95 rounded-2xl bg-card p-6 text-center shadow-2xl duration-200">
+            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-green-100 text-green-600">
+              <CheckCircle2 size={36} strokeWidth={2.5} />
+            </div>
+
+            <h2 className="mb-2 text-2xl font-black text-foreground">Pedido Enviado!</h2>
+            <p className="mb-6 font-semibold text-muted-foreground">
+              A comanda foi encaminhada para o caixa com sucesso.
+            </p>
+
+            <button
+              type="button"
+              onClick={() => setModalSucessoAberto(false)}
+              className="w-full rounded-xl bg-primary py-3 text-lg font-bold text-primary-foreground shadow-md transition hover:bg-[var(--brand-red-dark)] active:scale-95"
+            >
+              Entendido
+            </button>
+          </div>
+        </div>
+      )}
+
     </main>
   );
 }

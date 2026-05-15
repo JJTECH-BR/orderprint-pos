@@ -1,7 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { CheckCircle2, Clock, Printer, RefreshCw } from "lucide-react";
+import {
+  CheckCircle2,
+  Clock,
+  Printer,
+  RefreshCw,
+  DollarSign,
+  TrendingUp,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
 import { PinLock } from "@/components/PinLock";
+import somCampainha from "@/assets/campainha.mp3";
 
 export const Route = createFileRoute("/caixa")({
   component: CaixaRoute,
@@ -76,7 +86,6 @@ const lerPedidos = (): Pedido[] => {
 
 const centerText = (text: string) => {
   if (text.length >= CUPOM_WIDTH) return text;
-
   const left = Math.floor((CUPOM_WIDTH - text.length) / 2);
   return `${" ".repeat(left)}${text}`;
 };
@@ -206,7 +215,29 @@ function CaixaPage() {
   const [pedidoParaImprimir, setPedidoParaImprimir] = useState<Pedido | null>(null);
   const [statusImpressao, setStatusImpressao] = useState("Aguardando pedidos.");
   const [pedidoComFalha, setPedidoComFalha] = useState<Pedido | null>(null);
+  const [somAtivo, setSomAtivo] = useState(false);
   const imprimindoRef = useRef(false);
+
+  const pendentes = pedidos.filter((pedido) => !pedido.impresso).length;
+  const pendentesAnteriorRef = useRef(pendentes);
+
+  // Efeito para tocar som quando um novo pedido cair
+  useEffect(() => {
+    if (somAtivo && pendentes > pendentesAnteriorRef.current) {
+      const audio = new Audio(somCampainha); // <-- Mudei aqui, sem aspas!
+      audio.play().catch(() => console.warn("Navegador bloqueou o áudio automático."));
+    }
+    pendentesAnteriorRef.current = pendentes;
+  }, [pendentes, somAtivo]);
+
+  // Cálculos de Gestão
+  const faturamentoTotal = useMemo(() => {
+    return pedidos.reduce((total, pedido) => total + pedido.total, 0);
+  }, [pedidos]);
+
+  const ticketMedio = useMemo(() => {
+    return pedidos.length > 0 ? faturamentoTotal / pedidos.length : 0;
+  }, [pedidos, faturamentoTotal]);
 
   const imprimirPedido = useCallback(
     async (pedidoPendente: Pedido, pedidosBase: Pedido[], manual = false) => {
@@ -221,21 +252,15 @@ function CaixaPage() {
       imprimindoRef.current = true;
 
       try {
-        // 1. Tenta enviar para a ponte local via HTTP (Ideal para Produção com cabo)
         try {
           await enviarParaPonteImpressao(pedidoPendente);
         } catch (bridgeError) {
-          // 2. PLANO B (Fallback): Se a ponte não estiver rodando (Fase de Testes), 
-          // não trava o sistema! Usa a impressão nativa do navegador que já está com o CSS pronto.
           console.warn("Ponte local não encontrada. Utilizando impressão nativa do navegador.");
-
-          // O setTimeout garante que o React renderize a div oculta do cupom antes de chamar a impressora
           setTimeout(() => {
             window.print();
           }, 300);
         }
 
-        // Se chegou aqui (seja pela ponte ou pelo plano B), marca como sucesso!
         const pedidoImpresso: Pedido = {
           ...pedidoPendente,
           impresso: true,
@@ -252,7 +277,6 @@ function CaixaPage() {
         setPedidoComFalha(null);
         setStatusImpressao(`Cupom processado: ${pedidoImpresso.origem}.`);
       } catch (error) {
-        // Erro crítico geral (ex: falha ao salvar no localStorage)
         setPedidos(pedidosBase);
         setPedidoComFalha(pedidoPendente);
         setStatusImpressao("Falha ao processar o pedido.");
@@ -304,61 +328,29 @@ function CaixaPage() {
   }, [processarPedidos]);
 
   const pedidosRecentes = useMemo(() => pedidos.slice(0, 20), [pedidos]);
-  const pendentes = pedidos.filter((pedido) => !pedido.impresso).length;
 
   return (
     <>
       <style>{`
-        #cupom-impressao {
-          display: none;
-        }
-
+        #cupom-impressao { display: none; }
         @media print {
-          @page {
-            size: 80mm auto;
-            margin: 4mm;
-          }
-
-          html,
-          body {
-            background: #fff !important;
-            color: #000 !important;
-          }
-
-          .caixa-layout {
-            display: none !important;
-          }
-
+          @page { size: 58mm auto; margin: 2mm; }
+          html, body { background: #fff !important; color: #000 !important; }
+          .caixa-layout { display: none !important; }
           #cupom-impressao {
             display: block !important;
-            width: 72mm;
+            width: 48mm;
             margin: 0 auto;
             color: #000;
             font-family: "Courier New", ui-monospace, monospace;
-            font-size: 10pt;
-            line-height: 1.35;
+            font-size: 8pt;
+            line-height: 1.2;
             padding-bottom: 18mm;
           }
-
-          #cupom-impressao .linha {
-            display: flex;
-            justify-content: space-between;
-            gap: 8px;
-          }
-
-          #cupom-impressao .centro {
-            text-align: center;
-          }
-
-          #cupom-impressao .forte {
-            font-weight: 800;
-          }
-
-          #cupom-impressao .divisor {
-            margin: 5px 0;
-            text-align: center;
-            white-space: pre;
-          }
+          #cupom-impressao .linha { display: flex; justify-content: space-between; gap: 8px; }
+          #cupom-impressao .centro { text-align: center; }
+          #cupom-impressao .forte { font-weight: 800; }
+          #cupom-impressao .divisor { margin: 5px 0; text-align: center; white-space: pre; }
         }
       `}</style>
 
@@ -367,11 +359,22 @@ function CaixaPage() {
           <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-3 px-4 py-3">
             <div className="flex-1">
               <p className="text-xs font-black uppercase tracking-wide text-muted-foreground">
-                Impressão automática
+                Painel de Controle
               </p>
               <h1 className="text-2xl font-black text-primary">Caixa Ativo</h1>
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setSomAtivo(!somAtivo)}
+                className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-bold transition ${somAtivo
+                  ? "border-green-500 bg-green-50 text-green-700 hover:bg-green-100"
+                  : "border-border bg-background text-muted-foreground hover:border-primary hover:text-primary"
+                  }`}
+              >
+                {somAtivo ? <Volume2 size={16} /> : <VolumeX size={16} />}
+                {somAtivo ? "Som Ativado" : "Ativar Som"}
+              </button>
               <Link
                 to="/garcom"
                 className="rounded-lg border border-border bg-background px-3 py-2 text-sm font-bold text-foreground transition hover:border-primary hover:text-primary"
@@ -390,11 +393,11 @@ function CaixaPage() {
           </div>
         </header>
 
-        <section className="mx-auto grid max-w-7xl gap-4 px-4 py-6 md:grid-cols-3">
+        <section className="mx-auto grid max-w-7xl gap-4 px-4 py-6 md:grid-cols-2 lg:grid-cols-4">
           <div className="rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-card)]">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-sm font-bold uppercase text-muted-foreground">Pedidos</p>
+                <p className="text-sm font-bold uppercase text-muted-foreground">Pedidos Hoje</p>
                 <strong className="text-3xl font-black text-foreground">{pedidos.length}</strong>
               </div>
               <Clock className="text-primary" size={30} aria-hidden="true" />
@@ -404,37 +407,58 @@ function CaixaPage() {
           <div className="rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-card)]">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-sm font-bold uppercase text-muted-foreground">Pendentes</p>
-                <strong className="text-3xl font-black text-foreground">{pendentes}</strong>
+                <p className="text-sm font-bold uppercase text-muted-foreground">Faturamento</p>
+                <strong className="text-2xl font-black text-green-600">
+                  {formatCurrency(faturamentoTotal)}
+                </strong>
               </div>
-              <Printer className="text-primary" size={30} aria-hidden="true" />
+              <DollarSign className="text-green-600" size={30} aria-hidden="true" />
             </div>
           </div>
 
           <div className="rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-card)]">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-sm font-bold uppercase text-muted-foreground">Ponte local</p>
-                <strong className="text-xl font-black text-foreground">
-                  {statusImpressao}
+                <p className="text-sm font-bold uppercase text-muted-foreground">Ticket Médio</p>
+                <strong className="text-2xl font-black text-blue-600">
+                  {formatCurrency(ticketMedio)}
                 </strong>
-                {pedidoComFalha && (
-                  <div className="mt-3">
-                    <button
-                      type="button"
-                      onClick={imprimirPedidoManual}
-                      className="rounded-lg bg-primary px-3 py-2 text-sm font-black uppercase text-primary-foreground transition hover:bg-[var(--brand-red-dark)]"
-                    >
-                      Imprimir manualmente
-                    </button>
-                    <p className="mt-2 text-xs font-semibold text-muted-foreground">
-                      Este botão aparece apenas quando a impressão automática falha.
-                    </p>
-                  </div>
-                )}
               </div>
-              <CheckCircle2 className="text-primary" size={30} aria-hidden="true" />
+              <TrendingUp className="text-blue-600" size={30} aria-hidden="true" />
             </div>
+          </div>
+
+          <div className="rounded-lg border border-red-200 bg-red-50 p-4 shadow-[var(--shadow-card)]">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-bold uppercase text-red-700">Fila Pendente</p>
+                <strong className="text-3xl font-black text-red-700">{pendentes}</strong>
+              </div>
+              <Printer className="text-red-600" size={30} aria-hidden="true" />
+            </div>
+          </div>
+        </section>
+
+        {/* STATUS DA PONTE LOCAL */}
+        <section className="mx-auto max-w-7xl px-4 pb-6">
+          <div className="flex items-center justify-between gap-4 rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-card)]">
+            <div>
+              <p className="text-sm font-bold uppercase text-muted-foreground">Status da Impressão</p>
+              <strong className="text-base font-black text-foreground">
+                {statusImpressao}
+              </strong>
+            </div>
+            {pedidoComFalha ? (
+              <button
+                type="button"
+                onClick={imprimirPedidoManual}
+                className="rounded-lg bg-primary px-3 py-2 text-sm font-black uppercase text-primary-foreground transition hover:bg-[var(--brand-red-dark)]"
+              >
+                Imprimir Manualmente
+              </button>
+            ) : (
+              <CheckCircle2 className="text-green-500" size={24} aria-hidden="true" />
+            )}
           </div>
         </section>
 
@@ -465,7 +489,7 @@ function CaixaPage() {
                         <span
                           className={`rounded-lg px-2 py-1 text-xs font-black uppercase ${pedido.impresso
                             ? "bg-green-100 text-green-700"
-                            : "bg-yellow-100 text-yellow-800"
+                            : "bg-red-100 text-red-700 animate-pulse"
                             }`}
                         >
                           {pedido.impresso ? "Impresso" : "Pendente"}

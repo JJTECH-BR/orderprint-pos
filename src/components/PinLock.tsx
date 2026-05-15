@@ -8,12 +8,16 @@ interface PinLockProps {
 
 export function PinLock({ children, correctPin, title }: PinLockProps) {
   const [pin, setPin] = useState("");
-  // IMPORTANTE: Aqui define que o sistema começa BLOQUEADO (false)
-  const [unlocked, setUnlocked] = useState(false);
+  // IMPORTANTE: Agora ele verifica se já estava desbloqueado no sessionStorage
+  const [unlocked, setUnlocked] = useState(() => {
+    return sessionStorage.getItem(`pin-unlocked-${title}`) === "true";
+  });
 
   const handleUnlock = () => {
     if (pin === correctPin) {
       setUnlocked(true);
+      // Salva no navegador que esta tela foi desbloqueada para resistir ao F5
+      sessionStorage.setItem(`pin-unlocked-${title}`, "true");
     } else {
       alert("PIN incorreto!");
       setPin("");
