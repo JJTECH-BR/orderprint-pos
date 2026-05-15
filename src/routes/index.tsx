@@ -25,6 +25,9 @@ import {
   Trash2,
   UserRound,
 } from "lucide-react";
+// IMPORTANDO O FIREBASE AQUI
+import { doc, setDoc } from "firebase/firestore";
+import { db } from "@/lib/firebase";
 
 export const Route = createFileRoute("/")({
   component: Index,
@@ -75,7 +78,6 @@ export interface Pedido {
   observacoes?: string;
 }
 
-const STORAGE_KEY = "pedidos";
 const CLIENT_DRAFT_KEY = "cliente-carrinho-rascunho";
 const PIX_KEY = "84998135262";
 const CASHIER_WHATSAPP = "5584998135262";
@@ -136,25 +138,12 @@ const formatCurrency = (value: number) =>
     currency: "BRL",
   }).format(value);
 
-const lerPedidos = (): Pedido[] => {
-  const raw = localStorage.getItem(STORAGE_KEY);
-  if (!raw) return [];
-
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) ? (parsed as Pedido[]) : [];
-  } catch {
-    return [];
-  }
-};
-
 const lerClienteDraft = (): ClienteDraft => {
   const raw = localStorage.getItem(CLIENT_DRAFT_KEY);
   if (!raw) return clienteDraftDefault;
 
   try {
     const parsed = JSON.parse(raw) as Partial<ClienteDraft>;
-
     return {
       ...clienteDraftDefault,
       ...parsed,
@@ -184,8 +173,6 @@ function Index() {
   const [meiaSaborA, setMeiaSaborA] = useState(rascunhoInicial.meiaSaborA);
   const [meiaSaborB, setMeiaSaborB] = useState(rascunhoInicial.meiaSaborB);
   const [mensagemCarrinho, setMensagemCarrinho] = useState("");
-
-  // ESTADO DO MODAL ADICIONADO AQUI
   const [modalSucessoAberto, setModalSucessoAberto] = useState(false);
 
   const mensagemTimeoutRef = useRef<number | null>(null);
@@ -214,28 +201,15 @@ function Index() {
       meiaSaborA,
       meiaSaborB,
     };
-
     localStorage.setItem(CLIENT_DRAFT_KEY, JSON.stringify(draft));
   }, [
-    carrinho,
-    endereco,
-    formaPagamento,
-    meiaSaborA,
-    meiaSaborB,
-    meiaTamanho,
-    nome,
-    observacoes,
-    tab,
-    tipoEntrega,
+    carrinho, endereco, formaPagamento, meiaSaborA, meiaSaborB,
+    meiaTamanho, nome, observacoes, tab, tipoEntrega,
   ]);
 
   const mostrarMensagem = (mensagem: string) => {
     setMensagemCarrinho(mensagem);
-
-    if (mensagemTimeoutRef.current) {
-      window.clearTimeout(mensagemTimeoutRef.current);
-    }
-
+    if (mensagemTimeoutRef.current) window.clearTimeout(mensagemTimeoutRef.current);
     mensagemTimeoutRef.current = window.setTimeout(() => {
       setMensagemCarrinho("");
       mensagemTimeoutRef.current = null;
@@ -248,21 +222,13 @@ function Index() {
 
   const itensResumoWhatsApp = useMemo(() => {
     if (carrinho.length === 0) return "Nenhum item informado";
-
     return carrinho
-      .map(
-        (item) =>
-          `${item.quantidade}x ${item.nome}${item.tamanho ? ` (${item.tamanho})` : ""} - ${formatCurrency(
-            item.precoUnitario * item.quantidade,
-          )}`,
-      )
+      .map((item) => `${item.quantidade}x ${item.nome}${item.tamanho ? ` (${item.tamanho})` : ""} - ${formatCurrency(item.precoUnitario * item.quantidade)}`)
       .join("\n");
   }, [carrinho]);
 
   const mensagemWhatsApp = useMemo(() => {
-    const entregaSelecionada =
-      opcoesEntrega.find((opcao) => opcao.value === tipoEntrega)?.label ?? "Não informado";
-
+    const entregaSelecionada = opcoesEntrega.find((opcao) => opcao.value === tipoEntrega)?.label ?? "Não informado";
     return [
       "Olá, caixa da Pizzaria 2 Irmãos!",
       "Segue meu comprovante de PIX para conferência do pedido.",
@@ -280,21 +246,16 @@ function Index() {
       observacoes.trim() ? `\nObservações: ${observacoes.trim()}` : "",
       "",
       `Por favor, confirme que o cliente ${nome.trim() || "informado acima"} pagou e pode preparar o pedido dele.`,
-    ]
-      .filter(Boolean)
-      .join("\n");
+    ].filter(Boolean).join("\n");
   }, [endereco, itensResumoWhatsApp, nome, observacoes, subtotal, taxaEntrega, tipoEntrega, total]);
 
-  const whatsappLink = `https://wa.me/${CASHIER_WHATSAPP}?text=${encodeURIComponent(
-    mensagemWhatsApp,
-  )}`;
+  const whatsappLink = `https://wa.me/${CASHIER_WHATSAPP}?text=${encodeURIComponent(mensagemWhatsApp)}`;
 
   const copiarPix = () => {
     if (!("clipboard" in navigator)) {
       alert(`Não foi possível copiar automaticamente. Chave PIX: ${PIX_KEY}`);
       return;
     }
-
     void navigator.clipboard
       .writeText(PIX_KEY)
       .then(() => mostrarMensagem("Chave PIX copiada."))
@@ -306,7 +267,6 @@ function Index() {
       alert("Preencha nome, carrinho e endereço quando for entrega antes de enviar o comprovante.");
       return;
     }
-
     window.open(whatsappLink, "_blank", "noopener,noreferrer");
   };
 
@@ -314,11 +274,8 @@ function Index() {
     setCarrinho((itensAtuais) => {
       const existente = itensAtuais.find((itemAtual) => itemAtual.key === item.key);
       if (!existente) return [...itensAtuais, { ...item, quantidade: 1 }];
-
       return itensAtuais.map((itemAtual) =>
-        itemAtual.key === item.key
-          ? { ...itemAtual, quantidade: itemAtual.quantidade + 1 }
-          : itemAtual,
+        itemAtual.key === item.key ? { ...itemAtual, quantidade: itemAtual.quantidade + 1 } : itemAtual
       );
     });
     avisarItemAdicionado(item.nome);
@@ -327,10 +284,8 @@ function Index() {
   const alterarQuantidade = (key: string, delta: number) => {
     setCarrinho((itensAtuais) =>
       itensAtuais
-        .map((item) =>
-          item.key === key ? { ...item, quantidade: item.quantidade + delta } : item,
-        )
-        .filter((item) => item.quantidade > 0),
+        .map((item) => item.key === key ? { ...item, quantidade: item.quantidade + delta } : item)
+        .filter((item) => item.quantidade > 0)
     );
   };
 
@@ -354,14 +309,12 @@ function Index() {
       categoria: "pizzas",
       tamanho: meiaTamanho,
       precoUnitario: Math.max(saborA.prices[meiaTamanho], saborB.prices[meiaTamanho]),
-      meia: {
-        saborA: saborA.name,
-        saborB: saborB.name,
-      },
+      meia: { saborA: saborA.name, saborB: saborB.name },
     });
   };
 
-  const finalizarPedido = () => {
+  // FINALIZAR PEDIDO: AGORA MANDA PARA O FIREBASE
+  const finalizarPedido = async () => {
     if (carrinho.length === 0) {
       alert("Adicione pelo menos um item ao carrinho.");
       return;
@@ -377,10 +330,7 @@ function Index() {
       id: gerarIdPedido(),
       data: new Date().toISOString(),
       origem: entregaSelecionada?.label ?? "Cliente",
-      cliente: {
-        nome: nome.trim(),
-        endereco: endereco.trim(),
-      },
+      cliente: { nome: nome.trim(), endereco: endereco.trim() },
       tipoEntrega,
       pagamento: formaPagamento,
       itens: carrinho,
@@ -388,18 +338,24 @@ function Index() {
       taxaEntrega,
       total,
       impresso: false,
-      observacoes: observacoes.trim() || undefined,
+      observacoes: observacoes.trim(),
     };
 
-    localStorage.setItem(STORAGE_KEY, JSON.stringify([pedido, ...lerPedidos()]));
-    window.dispatchEvent(new Event("storage"));
+    try {
+      // SALVA NA NUVEM
+      await setDoc(doc(db, "pedidos", pedido.id), pedido);
 
-    localStorage.removeItem(CLIENT_DRAFT_KEY);
-    setCarrinho([]);
-    setObservacoes("");
+      // LIMPA A TELA LOCAL
+      localStorage.removeItem(CLIENT_DRAFT_KEY);
+      setCarrinho([]);
+      setObservacoes("");
 
-    // EXIBE O MODAL AQUI EM VEZ DO ALERT
-    setModalSucessoAberto(true);
+      // ABRE O MODAL
+      setModalSucessoAberto(true);
+    } catch (error) {
+      console.error("Erro ao salvar pedido:", error);
+      alert("Falha ao enviar o pedido. Verifique sua conexão com a internet.");
+    }
   };
 
   return (
@@ -918,7 +874,6 @@ function Index() {
         </aside>
       </div>
 
-      {/* NOVO: MODAL DE SUCESSO AQUI */}
       {modalSucessoAberto && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm transition-opacity">
           <div className="w-full max-w-sm animate-in fade-in zoom-in-95 rounded-2xl bg-card p-6 text-center shadow-2xl duration-200">

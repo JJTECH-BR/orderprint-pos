@@ -12,6 +12,9 @@ import {
 } from "lucide-react";
 import { PinLock } from "@/components/PinLock";
 import somCampainha from "@/assets/campainha.mp3";
+// IMPORTANDO O FIREBASE AQUI
+import { collection, onSnapshot, query, doc, updateDoc } from "firebase/firestore";
+import { db } from "@/lib/firebase";
 
 export const Route = createFileRoute("/caixa")({
   component: CaixaRoute,
@@ -55,7 +58,6 @@ export interface Pedido {
   tipoEntrega?: string;
 }
 
-const STORAGE_KEY = "pedidos";
 const PRINT_BRIDGE_URL = "http://127.0.0.1:3333/print";
 const PRINTER_NAME_KEY = "caixa-printer-name";
 const CUPOM_WIDTH = 32;
@@ -72,18 +74,6 @@ const formatDateTime = (value: string) =>
     timeStyle: "short",
   }).format(new Date(value));
 
-const lerPedidos = (): Pedido[] => {
-  const raw = localStorage.getItem(STORAGE_KEY);
-  if (!raw) return [];
-
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) ? (parsed as Pedido[]) : [];
-  } catch {
-    return [];
-  }
-};
-
 const centerText = (text: string) => {
   if (text.length >= CUPOM_WIDTH) return text;
   const left = Math.floor((CUPOM_WIDTH - text.length) / 2);
@@ -99,16 +89,13 @@ const wrapText = (text: string, width = CUPOM_WIDTH) => {
 
   words.forEach((word) => {
     const next = current ? `${current} ${word}` : word;
-
     if (next.length <= width) {
       current = next;
       return;
     }
-
     if (current) lines.push(current);
     current = word;
   });
-
   if (current) lines.push(current);
   return lines.length > 0 ? lines : [text];
 };
@@ -116,7 +103,6 @@ const wrapText = (text: string, width = CUPOM_WIDTH) => {
 const formatLine = (left: string, right: string) => {
   const available = CUPOM_WIDTH - right.length;
   const safeLeft = left.length > available ? left.slice(0, Math.max(0, available - 1)) : left;
-
   return `${safeLeft}${" ".repeat(Math.max(1, CUPOM_WIDTH - safeLeft.length - right.length))}${right}`;
 };
 
@@ -221,16 +207,15 @@ function CaixaPage() {
   const pendentes = pedidos.filter((pedido) => !pedido.impresso).length;
   const pendentesAnteriorRef = useRef(pendentes);
 
-  // Efeito para tocar som quando um novo pedido cair
+  // Efeito para tocar som quando um novo pedido cair (Funciona certinho com o Firebase!)
   useEffect(() => {
     if (somAtivo && pendentes > pendentesAnteriorRef.current) {
-      const audio = new Audio(somCampainha); // <-- Mudei aqui, sem aspas!
+      const audio = new Audio(somCampainha);
       audio.play().catch(() => console.warn("Navegador bloqueou o áudio automático."));
     }
     pendentesAnteriorRef.current = pendentes;
   }, [pendentes, somAtivo]);
 
-  // Cálculos de Gestão
   const faturamentoTotal = useMemo(() => {
     return pedidos.reduce((total, pedido) => total + pedido.total, 0);
   }, [pedidos]);
@@ -240,7 +225,7 @@ function CaixaPage() {
   }, [pedidos, faturamentoTotal]);
 
   const imprimirPedido = useCallback(
-    async (pedidoPendente: Pedido, pedidosBase: Pedido[], manual = false) => {
+    async (pedidoPendente: Pedido, manual = false) => {
       if (imprimindoRef.current) return;
 
       setPedidoParaImprimir(pedidoPendente);
@@ -261,23 +246,21 @@ function CaixaPage() {
           }, 300);
         }
 
-        const pedidoImpresso: Pedido = {
-          ...pedidoPendente,
-          impresso: true,
-          impressoEm: new Date().toISOString(),
-        };
+        // AGORA ATUALIZA NA NUVEM!
+        try {
+          await updateDoc(doc(db, "pedidos", pedidoPendente.id), {
+            impresso: true,
+            impressoEm: new Date().toISOString(),
+          });
+          setPedidoComFalha(null);
+          setStatusImpressao(`Cupom processado: ${pedidoPendente.origem}.`);
+        } catch (errorDb) {
+          console.error("Erro ao salvar status de impressao:", errorDb);
+          setPedidoComFalha(pedidoPendente);
+          setStatusImpressao("Falha ao salvar status no banco de dados.");
+        }
 
-        const pedidosAtualizados = pedidosBase.map((pedido) =>
-          pedido.id === pedidoPendente.id ? pedidoImpresso : pedido,
-        );
-
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(pedidosAtualizados));
-        setPedidos(pedidosAtualizados);
-        setPedidoParaImprimir(pedidoImpresso);
-        setPedidoComFalha(null);
-        setStatusImpressao(`Cupom processado: ${pedidoImpresso.origem}.`);
       } catch (error) {
-        setPedidos(pedidosBase);
         setPedidoComFalha(pedidoPendente);
         setStatusImpressao("Falha ao processar o pedido.");
       } finally {
@@ -287,44 +270,48 @@ function CaixaPage() {
     [],
   );
 
-  const processarPedidos = useCallback(async () => {
+  const processarPedidos = useCallback(async (listaPedidos: Pedido[]) => {
     if (imprimindoRef.current) return;
 
-    const pedidosSalvos = lerPedidos().sort(
-      (a, b) => new Date(b.data).getTime() - new Date(a.data).getTime(),
-    );
-    const pendente = pedidosSalvos.find((pedido) => !pedido.impresso);
+    const pendente = listaPedidos.find((pedido) => !pedido.impresso);
 
     if (!pendente) {
-      setPedidos(pedidosSalvos);
       setPedidoComFalha(null);
       setStatusImpressao("Nenhum pedido pendente.");
       return;
     }
 
-    await imprimirPedido(pendente, pedidosSalvos);
+    await imprimirPedido(pendente);
   }, [imprimirPedido]);
 
   const imprimirPedidoManual = useCallback(async () => {
     if (!pedidoComFalha) return;
-
-    const pedidosSalvos = lerPedidos().sort(
-      (a, b) => new Date(b.data).getTime() - new Date(a.data).getTime(),
-    );
-    const pedidoPendenteAtual =
-      pedidosSalvos.find((pedido) => pedido.id === pedidoComFalha.id && !pedido.impresso) ??
-      pedidoComFalha;
-
-    await imprimirPedido(pedidoPendenteAtual, pedidosSalvos, true);
+    await imprimirPedido(pedidoComFalha, true);
   }, [imprimirPedido, pedidoComFalha]);
 
+  // ESPIÃO DO FIREBASE (TEMPO REAL)
   useEffect(() => {
-    processarPedidos();
-    window.addEventListener("storage", processarPedidos);
+    const q = query(collection(db, "pedidos"));
 
-    return () => {
-      window.removeEventListener("storage", processarPedidos);
-    };
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const pedidosFirebase: Pedido[] = [];
+
+      snapshot.forEach((doc) => {
+        pedidosFirebase.push(doc.data() as Pedido);
+      });
+
+      const pedidosOrdenados = pedidosFirebase.sort(
+        (a, b) => new Date(b.data).getTime() - new Date(a.data).getTime()
+      );
+
+      setPedidos(pedidosOrdenados);
+
+      // Tenta imprimir assim que recebe os dados novos
+      processarPedidos(pedidosOrdenados);
+    });
+
+    // Limpa a conexão se o componente for desmontado
+    return () => unsubscribe();
   }, [processarPedidos]);
 
   const pedidosRecentes = useMemo(() => pedidos.slice(0, 20), [pedidos]);
@@ -383,7 +370,7 @@ function CaixaPage() {
               </Link>
               <button
                 type="button"
-                onClick={processarPedidos}
+                onClick={() => processarPedidos(pedidos)}
                 className="flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-black text-primary-foreground transition hover:bg-[var(--brand-red-dark)]"
               >
                 <RefreshCw size={16} aria-hidden="true" />

@@ -11,6 +11,9 @@ import {
 } from "lucide-react";
 import { PinLock } from "@/components/PinLock";
 import { bebidas, pasteis, pizzas, porcoes, sucos, type PizzaSize } from "@/data/menu";
+// IMPORTANDO O FIREBASE AQUI
+import { doc, setDoc } from "firebase/firestore";
+import { db } from "@/lib/firebase";
 
 export const Route = createFileRoute("/garcom")({
   component: GarcomRoute,
@@ -58,7 +61,6 @@ interface PedidoMesa {
   observacoes?: string;
 }
 
-const STORAGE_KEY = "pedidos";
 const GARCOM_DRAFT_KEY = "garcom-comanda-rascunho";
 const SUCO_AO_LEITE_ACRESCIMO = 1;
 const tamanhosPizza: PizzaSize[] = ["M", "G", "GG"];
@@ -85,25 +87,12 @@ const formatCurrency = (value: number) =>
     currency: "BRL",
   }).format(value);
 
-const lerPedidos = (): PedidoMesa[] => {
-  const raw = localStorage.getItem(STORAGE_KEY);
-  if (!raw) return [];
-
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) ? (parsed as PedidoMesa[]) : [];
-  } catch {
-    return [];
-  }
-};
-
 const lerGarcomDraft = (): GarcomDraft => {
   const raw = localStorage.getItem(GARCOM_DRAFT_KEY);
   if (!raw) return garcomDraftDefault;
 
   try {
     const parsed = JSON.parse(raw) as Partial<GarcomDraft>;
-
     return {
       ...garcomDraftDefault,
       ...parsed,
@@ -138,18 +127,12 @@ function GarcomPage() {
   const [meiaSaborA, setMeiaSaborA] = useState(rascunhoInicial.meiaSaborA);
   const [meiaSaborB, setMeiaSaborB] = useState(rascunhoInicial.meiaSaborB);
   const [mensagemCarrinho, setMensagemCarrinho] = useState("");
-
-  // 1. ESTADO DO MODAL ADICIONADO AQUI
   const [modalSucessoAberto, setModalSucessoAberto] = useState(false);
 
   const mensagemTimeoutRef = useRef<number | null>(null);
 
   const subtotal = useMemo(
-    () =>
-      pedido.carrinho.reduce(
-        (total, item) => total + item.precoUnitario * item.quantidade,
-        0,
-      ),
+    () => pedido.carrinho.reduce((total, item) => total + item.precoUnitario * item.quantidade, 0),
     [pedido.carrinho],
   );
 
@@ -160,17 +143,12 @@ function GarcomPage() {
       meiaSaborA,
       meiaSaborB,
     };
-
     localStorage.setItem(GARCOM_DRAFT_KEY, JSON.stringify(draft));
   }, [meiaSaborA, meiaSaborB, meiaTamanho, pedido]);
 
   const avisarItemAdicionado = (nomeItem: string) => {
     setMensagemCarrinho(`${nomeItem} adicionado ao carrinho.`);
-
-    if (mensagemTimeoutRef.current) {
-      window.clearTimeout(mensagemTimeoutRef.current);
-    }
-
+    if (mensagemTimeoutRef.current) window.clearTimeout(mensagemTimeoutRef.current);
     mensagemTimeoutRef.current = window.setTimeout(() => {
       setMensagemCarrinho("");
       mensagemTimeoutRef.current = null;
@@ -182,12 +160,9 @@ function GarcomPage() {
       const existente = estadoAtual.carrinho.find((itemAtual) => itemAtual.key === item.key);
       const carrinho = existente
         ? estadoAtual.carrinho.map((itemAtual) =>
-          itemAtual.key === item.key
-            ? { ...itemAtual, quantidade: itemAtual.quantidade + 1 }
-            : itemAtual,
+          itemAtual.key === item.key ? { ...itemAtual, quantidade: itemAtual.quantidade + 1 } : itemAtual
         )
         : [...estadoAtual.carrinho, { ...item, quantidade: 1 }];
-
       return { ...estadoAtual, carrinho };
     });
     avisarItemAdicionado(item.nome);
@@ -209,10 +184,7 @@ function GarcomPage() {
       categoria: "pizza",
       tamanho: meiaTamanho,
       precoUnitario: Math.max(saborA.prices[meiaTamanho], saborB.prices[meiaTamanho]),
-      meia: {
-        saborA: saborA.name,
-        saborB: saborB.name,
-      },
+      meia: { saborA: saborA.name, saborB: saborB.name },
     });
   };
 
@@ -220,9 +192,7 @@ function GarcomPage() {
     setPedido((estadoAtual) => ({
       ...estadoAtual,
       carrinho: estadoAtual.carrinho
-        .map((item) =>
-          item.key === key ? { ...item, quantidade: item.quantidade + delta } : item,
-        )
+        .map((item) => item.key === key ? { ...item, quantidade: item.quantidade + delta } : item)
         .filter((item) => item.quantidade > 0),
     }));
   };
@@ -243,7 +213,8 @@ function GarcomPage() {
     });
   };
 
-  const enviarPedido = () => {
+  // ENVIAR PEDIDO: AGORA MANDA PARA O FIREBASE
+  const enviarPedido = async () => {
     if (!pedido.nomeGarcom.trim()) {
       alert("Informe o nome do garçom.");
       return;
@@ -271,21 +242,23 @@ function GarcomPage() {
       taxaEntrega: 0,
       total: subtotal,
       impresso: false,
-      observacoes: pedido.observacoes.trim() || undefined,
+      observacoes: pedido.observacoes.trim(),
     };
 
-    localStorage.setItem(STORAGE_KEY, JSON.stringify([pedidoMesa, ...lerPedidos()]));
-    window.dispatchEvent(new Event("storage"));
-    localStorage.removeItem(GARCOM_DRAFT_KEY);
+    try {
+      // SALVA NA NUVEM
+      await setDoc(doc(db, "pedidos", pedidoMesa.id), pedidoMesa);
 
-    // Guardamos o número da mesa antes de limpar para mostrar no modal
-    const mesaFinalizada = pedido.numeroMesa.trim();
+      // LIMPA LOCAL
+      localStorage.removeItem(GARCOM_DRAFT_KEY);
+      limparPedido();
 
-    limparPedido();
-
-    // 2. ABRE O MODAL EM VEZ DO ALERT
-    // alert("Pedido enviado para o caixa.");
-    setModalSucessoAberto(true);
+      // ABRE O MODAL
+      setModalSucessoAberto(true);
+    } catch (error) {
+      console.error("Erro ao enviar comanda:", error);
+      alert("Falha ao enviar a comanda. Verifique sua conexão com a internet.");
+    }
   };
 
   return (
@@ -668,7 +641,6 @@ function GarcomPage() {
         </aside>
       </div>
 
-      {/* 3. NOVO: MODAL DE SUCESSO DO GARÇOM AQUI */}
       {modalSucessoAberto && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm transition-opacity">
           <div className="w-full max-w-sm animate-in fade-in zoom-in-95 rounded-2xl bg-card p-6 text-center shadow-2xl duration-200">
