@@ -1,3 +1,4 @@
+// src/routes/index.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import logo from "@/assets/logo.jpeg";
@@ -25,8 +26,7 @@ import {
   Trash2,
   UserRound,
 } from "lucide-react";
-// IMPORTANDO O FIREBASE AQUI
-import { doc, setDoc } from "firebase/firestore";
+import { doc, setDoc, onSnapshot } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 
 export const Route = createFileRoute("/")({
@@ -76,6 +76,7 @@ export interface Pedido {
   total: number;
   impresso: boolean;
   observacoes?: string;
+  status?: string;
 }
 
 const CLIENT_DRAFT_KEY = "cliente-carrinho-rascunho";
@@ -175,6 +176,9 @@ function Index() {
   const [mensagemCarrinho, setMensagemCarrinho] = useState("");
   const [modalSucessoAberto, setModalSucessoAberto] = useState(false);
 
+  // ESTADO DA LOJA (Inicia fechada até o Firebase responder)
+  const [lojaAberta, setLojaAberta] = useState(false);
+
   const mensagemTimeoutRef = useRef<number | null>(null);
 
   const subtotal = useMemo(
@@ -206,6 +210,19 @@ function Index() {
     carrinho, endereco, formaPagamento, meiaSaborA, meiaSaborB,
     meiaTamanho, nome, observacoes, tab, tipoEntrega,
   ]);
+
+  // ESPIÃO DA LOJA ABERTA/FECHADA
+  useEffect(() => {
+    const unsubscribeLoja = onSnapshot(doc(db, "configuracoes", "loja"), (docSnap) => {
+      if (docSnap.exists()) {
+        setLojaAberta(docSnap.data().aberta);
+      } else {
+        // Se o documento não existir, assume aberta para não travar de primeira
+        setLojaAberta(true);
+      }
+    });
+    return () => unsubscribeLoja();
+  }, []);
 
   const mostrarMensagem = (mensagem: string) => {
     setMensagemCarrinho(mensagem);
@@ -270,7 +287,12 @@ function Index() {
     window.open(whatsappLink, "_blank", "noopener,noreferrer");
   };
 
+  // PROTEÇÃO CONTRA CLIQUES SE ESTIVER FECHADO
   const adicionarItem = (item: Omit<ItemCarrinho, "quantidade">) => {
+    if (!lojaAberta) {
+      alert("Estamos fechados no momento! Abriremos às 18:00h.");
+      return;
+    }
     setCarrinho((itensAtuais) => {
       const existente = itensAtuais.find((itemAtual) => itemAtual.key === item.key);
       if (!existente) return [...itensAtuais, { ...item, quantidade: 1 }];
@@ -282,6 +304,7 @@ function Index() {
   };
 
   const alterarQuantidade = (key: string, delta: number) => {
+    if (!lojaAberta) return;
     setCarrinho((itensAtuais) =>
       itensAtuais
         .map((item) => item.key === key ? { ...item, quantidade: item.quantidade + delta } : item)
@@ -294,6 +317,10 @@ function Index() {
   };
 
   const adicionarPizzaMeia = () => {
+    if (!lojaAberta) {
+      alert("Estamos fechados no momento! Abriremos às 18:00h.");
+      return;
+    }
     const saborA = pizzas.find((pizza) => String(pizza.id) === meiaSaborA);
     const saborB = pizzas.find((pizza) => String(pizza.id) === meiaSaborB);
 
@@ -313,13 +340,15 @@ function Index() {
     });
   };
 
-  // FINALIZAR PEDIDO: AGORA MANDA PARA O FIREBASE
   const finalizarPedido = async () => {
+    if (!lojaAberta) {
+      alert("A loja está fechada. Volte mais tarde!");
+      return;
+    }
     if (carrinho.length === 0) {
       alert("Adicione pelo menos um item ao carrinho.");
       return;
     }
-
     if (!dadosConferenciaOk) {
       alert("Preencha os dados para conferência antes de finalizar o pedido.");
       return;
@@ -342,15 +371,10 @@ function Index() {
     };
 
     try {
-      // SALVA NA NUVEM
       await setDoc(doc(db, "pedidos", pedido.id), pedido);
-
-      // LIMPA A TELA LOCAL
       localStorage.removeItem(CLIENT_DRAFT_KEY);
       setCarrinho([]);
       setObservacoes("");
-
-      // ABRE O MODAL
       setModalSucessoAberto(true);
     } catch (error) {
       console.error("Erro ao salvar pedido:", error);
@@ -365,7 +389,7 @@ function Index() {
           <img
             src={logo}
             alt="Pizzaria 2 Irmãos"
-            className="h-14 w-14 rounded-lg object-cover ring-2 ring-secondary"
+            className={`h-14 w-14 rounded-lg object-cover ring-2 ring-secondary ${!lojaAberta ? "grayscale" : ""}`}
           />
           <div className="flex-1">
             <h1 className="text-2xl font-black uppercase text-primary md:text-3xl">
@@ -374,6 +398,12 @@ function Index() {
             <p className="text-sm font-semibold text-muted-foreground">
               Cardápio Digital - 🕒Terça a Domingo | das 18h às 22h. Faça seu pedido e retire ou receba em casa!
             </p>
+            {/* AVISO DE FECHADO JUNTO À LOGO E NOME */}
+            {!lojaAberta && (
+              <div className="mt-2 inline-block rounded bg-red-600 px-3 py-1 text-xs font-black uppercase tracking-wider text-white shadow-md animate-pulse">
+                ⚠️ Fechado no momento. Abrimos às 18:00h!
+              </div>
+            )}
           </div>
         </div>
       </header>
@@ -390,7 +420,8 @@ function Index() {
       )}
 
       <div className="mx-auto grid max-w-7xl gap-6 px-4 py-6 lg:grid-cols-[1fr_400px]">
-        <main className="space-y-5">
+        {/* MAGICA DO BLOQUEIO AQUI: Se lojaAberta for false, a tela fica com ponteiro bloqueado e opacidade */}
+        <main className={`space-y-5 transition-all duration-300 ${!lojaAberta ? 'pointer-events-none opacity-50 grayscale' : ''}`}>
           <section className="rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-card)]">
             <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
               <label className="space-y-2">
@@ -704,7 +735,7 @@ function Index() {
           </section>
         </main>
 
-        <aside className="lg:sticky lg:top-24 lg:self-start">
+        <aside className={`lg:sticky lg:top-24 lg:self-start transition-all duration-300 ${!lojaAberta ? 'pointer-events-none opacity-50 grayscale' : ''}`}>
           <section className="flex flex-col rounded-lg border-2 border-primary bg-card shadow-[var(--shadow-warm)]">
             <div className="flex items-center justify-between gap-3 border-b border-border bg-primary px-4 py-3 text-primary-foreground">
               <h2 className="flex items-center gap-2 text-lg font-black uppercase">
@@ -862,11 +893,11 @@ function Index() {
                 <button
                   type="button"
                   onClick={finalizarPedido}
-                  disabled={!dadosConferenciaOk}
+                  disabled={!dadosConferenciaOk || !lojaAberta}
                   className="flex items-center justify-center gap-2 rounded-lg bg-primary py-3 text-sm font-black uppercase text-primary-foreground shadow-[var(--shadow-warm)] transition hover:bg-[var(--brand-red-dark)] disabled:cursor-not-allowed disabled:opacity-45"
                 >
                   <ReceiptText size={17} aria-hidden="true" />
-                  Finalizar
+                  {lojaAberta ? "Finalizar" : "Fechado"}
                 </button>
               </div>
             </div>
