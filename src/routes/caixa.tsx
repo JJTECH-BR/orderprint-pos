@@ -499,7 +499,7 @@ function CaixaPage() {
               <p className="text-xs font-black uppercase tracking-wide text-muted-foreground">
                 Painel Gerencial
               </p>
-              <h1 className="text-2xl font-black text-primary">Caixa Inteligente</h1>
+              <h1 className="text-2xl font-black text-primary">Central de Controle</h1>
             </div>
             <div className="flex flex-wrap gap-2">
               <button
@@ -549,8 +549,8 @@ function CaixaPage() {
                     key={periodo}
                     onClick={() => setFiltroTempo(periodo)}
                     className={`flex-1 sm:flex-none px-4 py-2 text-xs font-black uppercase rounded-md transition-colors ${filtroTempo === periodo
-                        ? 'bg-primary text-primary-foreground shadow-sm'
-                        : 'text-muted-foreground hover:bg-muted/80'
+                      ? 'bg-primary text-primary-foreground shadow-sm'
+                      : 'text-muted-foreground hover:bg-muted/80'
                       }`}
                   >
                     {periodo}
@@ -561,8 +561,8 @@ function CaixaPage() {
               <button
                 onClick={() => setMostrarCancelados(!mostrarCancelados)}
                 className={`flex flex-1 sm:flex-none justify-center items-center gap-2 px-4 py-2 text-xs font-black uppercase rounded-lg border transition-colors shadow-sm ${mostrarCancelados
-                    ? 'border-red-500 bg-red-600 text-white'
-                    : 'border-border bg-card text-muted-foreground hover:bg-muted'
+                  ? 'border-red-500 bg-red-600 text-white'
+                  : 'border-border bg-card text-muted-foreground hover:bg-muted'
                   }`}
               >
                 <Ban size={14} />
