@@ -20,7 +20,8 @@ import {
   Filter,
   Ban,
   ShoppingBag,
-  AlertTriangle
+  AlertTriangle,
+  Settings
 } from "lucide-react";
 import { PinLock } from "@/components/PinLock";
 import somCampainha from "@/assets/campainha.mp3";
@@ -223,6 +224,10 @@ function CaixaPage() {
   // ESTADOS DO FILTRO DINÂMICO
   const [filtroTempo, setFiltroTempo] = useState<'hoje' | 'semana' | 'mes' | 'todos'>('hoje');
   const [mostrarCancelados, setMostrarCancelados] = useState(false);
+
+  // ESTADOS DA CONFIGURAÇÃO DE IMPRESSORA
+  const [modalConfigAberto, setModalConfigAberto] = useState(false);
+  const [inputPrinterName, setInputPrinterName] = useState("");
 
   // FILA DE IMPRESSÃO (Sempre em tempo real, ignora o filtro de data)
   const pendentes = pedidos.filter((pedido) => !pedido.impresso && pedido.status !== 'cancelado').length;
@@ -467,6 +472,17 @@ function CaixaPage() {
     }
   };
 
+  // LÓGICA DE CONFIGURAÇÃO DA IMPRESSORA
+  const abrirModalConfig = () => {
+    setInputPrinterName(localStorage.getItem(PRINTER_NAME_KEY) ?? "");
+    setModalConfigAberto(true);
+  };
+
+  const salvarConfigImpressora = () => {
+    localStorage.setItem(PRINTER_NAME_KEY, inputPrinterName.trim());
+    setModalConfigAberto(false);
+  };
+
   return (
     <>
       <style>{`
@@ -524,6 +540,14 @@ function CaixaPage() {
               >
                 {somAtivo ? <Volume2 size={16} /> : <VolumeX size={16} />}
                 {somAtivo ? "Som Ativado" : "Ativar Som"}
+              </button>
+              <button
+                type="button"
+                onClick={abrirModalConfig}
+                className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-sm font-bold text-muted-foreground transition hover:border-primary hover:text-primary"
+              >
+                <Settings size={16} />
+                Impressora
               </button>
               <Link
                 to="/garcom"
@@ -880,6 +904,43 @@ function CaixaPage() {
                 className="flex-1 rounded-xl bg-red-600 py-3 text-sm font-bold text-white shadow-md transition hover:bg-red-700 active:scale-95"
               >
                 Sim, Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE CONFIGURAÇÃO DE IMPRESSORA */}
+      {modalConfigAberto && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-2xl bg-card p-6 shadow-2xl border border-border">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-xl font-black text-foreground flex items-center gap-2">
+                <Printer size={24} className="text-primary" />
+                Impressora
+              </h2>
+              <button onClick={() => setModalConfigAberto(false)} className="rounded-full p-2 bg-muted text-muted-foreground hover:bg-red-100 hover:text-red-600 transition">
+                <X size={20} />
+              </button>
+            </div>
+
+            <label className="block space-y-2 mb-6">
+              <span className="text-sm font-bold text-foreground">Nome exato da impressora (Windows/Linux):</span>
+              <input
+                type="text"
+                value={inputPrinterName}
+                onChange={(e) => setInputPrinterName(e.target.value)}
+                className="h-11 w-full rounded-lg border border-border bg-background px-3 text-sm font-semibold outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/10"
+                placeholder="Ex: POS-58"
+              />
+            </label>
+
+            <div className="flex gap-3">
+              <button onClick={() => setModalConfigAberto(false)} className="flex-1 rounded-xl border border-border bg-background py-3 text-sm font-bold text-foreground transition hover:bg-muted">
+                Cancelar
+              </button>
+              <button onClick={salvarConfigImpressora} className="flex-1 rounded-xl bg-primary py-3 text-sm font-bold text-primary-foreground shadow-md transition hover:bg-[var(--brand-red-dark)]">
+                Salvar
               </button>
             </div>
           </div>
