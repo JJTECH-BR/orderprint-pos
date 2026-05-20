@@ -25,6 +25,7 @@ import {
   Store,
   Trash2,
   UserRound,
+  AlertTriangle
 } from "lucide-react";
 import { doc, setDoc, onSnapshot } from "firebase/firestore";
 import { db } from "@/lib/firebase";
@@ -98,7 +99,7 @@ const opcoesEntrega: {
   label: string;
   detalhe: string;
   taxa: number;
-  icon: typeof Store;
+  icon: React.ElementType; // CORREÇÃO PARA O TIPO DO ÍCONE
 }[] = [
     { value: "NO_LOCAL", label: "No Local", detalhe: "Grátis", taxa: 0, icon: Store },
     { value: "RETIRAR", label: "Retirar", detalhe: "Grátis", taxa: 0, icon: PackageCheck },
@@ -176,8 +177,13 @@ function Index() {
   const [mensagemCarrinho, setMensagemCarrinho] = useState("");
   const [modalSucessoAberto, setModalSucessoAberto] = useState(false);
 
-  // ESTADO DA LOJA (Inicia fechada até o Firebase responder)
-  const [lojaAberta, setLojaAberta] = useState(false);
+  // ESTADO DA LOJA E ESTOQUE
+  const [lojaAberta, setLojaAberta] = useState(true);
+  const [horarioFuncionamento, setHorarioFuncionamento] = useState("🕒Quarta a Domingo | das 18h às 22h.");
+  const [esgotados, setEsgotados] = useState<number[]>([]);
+
+  // ESTADO DE ALERTA GLOBAL (Substituindo alerts nativos)
+  const [alerta, setAlerta] = useState<{ titulo: string; mensagem: string; tipo: "sucesso" | "erro" | "aviso" } | null>(null);
 
   const mensagemTimeoutRef = useRef<number | null>(null);
 
@@ -211,17 +217,29 @@ function Index() {
     meiaTamanho, nome, observacoes, tab, tipoEntrega,
   ]);
 
-  // ESPIÃO DA LOJA ABERTA/FECHADA
+  // ESPIÃO DA LOJA ABERTA/FECHADA E CARDÁPIO
   useEffect(() => {
     const unsubscribeLoja = onSnapshot(doc(db, "configuracoes", "loja"), (docSnap) => {
       if (docSnap.exists()) {
         setLojaAberta(docSnap.data().aberta);
+        if (docSnap.data().horarioFuncionamento) {
+          setHorarioFuncionamento(docSnap.data().horarioFuncionamento);
+        }
       } else {
-        // Se o documento não existir, assume aberta para não travar de primeira
         setLojaAberta(true);
       }
     });
-    return () => unsubscribeLoja();
+
+    const unsubscribeCardapio = onSnapshot(doc(db, "configuracoes", "cardapio"), (docSnap) => {
+      if (docSnap.exists() && docSnap.data().esgotados) {
+        setEsgotados(docSnap.data().esgotados);
+      }
+    });
+
+    return () => {
+      unsubscribeLoja();
+      unsubscribeCardapio();
+    };
   }, []);
 
   const mostrarMensagem = (mensagem: string) => {
@@ -270,29 +288,34 @@ function Index() {
 
   const copiarPix = () => {
     if (!("clipboard" in navigator)) {
-      alert(`Não foi possível copiar automaticamente. Chave PIX: ${PIX_KEY}`);
+      setAlerta({ titulo: "Aviso", mensagem: `Não foi possível copiar automaticamente. Chave PIX: ${PIX_KEY}`, tipo: "aviso" });
       return;
     }
     void navigator.clipboard
       .writeText(PIX_KEY)
       .then(() => mostrarMensagem("Chave PIX copiada."))
-      .catch(() => alert(`Não foi possível copiar automaticamente. Chave PIX: ${PIX_KEY}`));
+      .catch(() => setAlerta({ titulo: "Aviso", mensagem: `Não foi possível copiar automaticamente. Chave PIX: ${PIX_KEY}`, tipo: "aviso" }));
   };
 
   const abrirWhatsAppComprovante = () => {
     if (!dadosConferenciaOk) {
-      alert("Preencha nome, carrinho e endereço quando for entrega antes de enviar o comprovante.");
+      setAlerta({ titulo: "Atenção", mensagem: "Preencha nome, carrinho e endereço (se for entrega) antes de enviar o comprovante.", tipo: "erro" });
       return;
     }
     window.open(whatsappLink, "_blank", "noopener,noreferrer");
   };
 
-  // PROTEÇÃO CONTRA CLIQUES SE ESTIVER FECHADO
+  // PROTEÇÃO CONTRA CLIQUES SE ESTIVER FECHADO OU ESGOTADO
   const adicionarItem = (item: Omit<ItemCarrinho, "quantidade">) => {
     if (!lojaAberta) {
-      alert("Estamos fechados no momento! Abriremos às 18:00h.");
+      setAlerta({ titulo: "Loja Fechada", mensagem: "Estamos fechados no momento! Abriremos às 18:00h.", tipo: "aviso" });
       return;
     }
+    if (esgotados.includes(item.id)) {
+      setAlerta({ titulo: "Item Esgotado", mensagem: "Desculpe, este produto esgotou hoje!", tipo: "erro" });
+      return;
+    }
+
     setCarrinho((itensAtuais) => {
       const existente = itensAtuais.find((itemAtual) => itemAtual.key === item.key);
       if (!existente) return [...itensAtuais, { ...item, quantidade: 1 }];
@@ -318,14 +341,19 @@ function Index() {
 
   const adicionarPizzaMeia = () => {
     if (!lojaAberta) {
-      alert("Estamos fechados no momento! Abriremos às 18:00h.");
+      setAlerta({ titulo: "Loja Fechada", mensagem: "Estamos fechados no momento! Abriremos às 18:00h.", tipo: "aviso" });
       return;
     }
     const saborA = pizzas.find((pizza) => String(pizza.id) === meiaSaborA);
     const saborB = pizzas.find((pizza) => String(pizza.id) === meiaSaborB);
 
     if (!saborA || !saborB) {
-      alert("Escolha os dois sabores da pizza meia a meia.");
+      setAlerta({ titulo: "Atenção", mensagem: "Escolha os dois sabores da pizza meia a meia.", tipo: "aviso" });
+      return;
+    }
+
+    if (esgotados.includes(saborA.id) || esgotados.includes(saborB.id)) {
+      setAlerta({ titulo: "Sabor Esgotado", mensagem: "Um dos sabores escolhidos acabou no estoque!", tipo: "erro" });
       return;
     }
 
@@ -342,15 +370,15 @@ function Index() {
 
   const finalizarPedido = async () => {
     if (!lojaAberta) {
-      alert("A loja está fechada. Volte mais tarde!");
+      setAlerta({ titulo: "Loja Fechada", mensagem: "A loja está fechada. Volte mais tarde!", tipo: "aviso" });
       return;
     }
     if (carrinho.length === 0) {
-      alert("Adicione pelo menos um item ao carrinho.");
+      setAlerta({ titulo: "Carrinho Vazio", mensagem: "Adicione pelo menos um item ao carrinho.", tipo: "aviso" });
       return;
     }
     if (!dadosConferenciaOk) {
-      alert("Preencha os dados para conferência antes de finalizar o pedido.");
+      setAlerta({ titulo: "Dados Incompletos", mensagem: "Preencha os dados de contato antes de finalizar o pedido.", tipo: "erro" });
       return;
     }
 
@@ -378,12 +406,12 @@ function Index() {
       setModalSucessoAberto(true);
     } catch (error) {
       console.error("Erro ao salvar pedido:", error);
-      alert("Falha ao enviar o pedido. Verifique sua conexão com a internet.");
+      setAlerta({ titulo: "Falha na Conexão", mensagem: "Falha ao enviar o pedido. Verifique sua conexão com a internet.", tipo: "erro" });
     }
   };
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background pb-12 lg:pb-0">
       <header className="sticky top-0 z-30 border-b border-border bg-card/95 shadow-[var(--shadow-card)] backdrop-blur">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-3 px-4 py-3">
           <img
@@ -396,9 +424,8 @@ function Index() {
               Pizzaria 2 Irmãos
             </h1>
             <p className="text-sm font-semibold text-muted-foreground">
-              Cardápio Digital - 🕒Terça a Domingo | das 18h às 22h. Faça seu pedido e retire ou receba em casa!
+              Cardápio Digital - {horarioFuncionamento} Faça seu pedido e retire ou receba em casa!
             </p>
-            {/* AVISO DE FECHADO JUNTO À LOGO E NOME */}
             {!lojaAberta && (
               <div className="mt-2 inline-block rounded bg-red-600 px-3 py-1 text-xs font-black uppercase tracking-wider text-white shadow-md animate-pulse">
                 ⚠️ Fechado no momento. Abrimos às 18:00h!
@@ -419,8 +446,28 @@ function Index() {
         </div>
       )}
 
+      {/* MODAL GLOBAL DE ALERTA */}
+      {alerta && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm transition-opacity">
+          <div className="w-full max-w-sm animate-in fade-in zoom-in-95 rounded-2xl bg-card p-6 text-center shadow-2xl duration-200 border border-border">
+            <div className={`mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full ${alerta.tipo === 'erro' ? 'bg-red-100 text-red-600' : alerta.tipo === 'sucesso' ? 'bg-green-100 text-green-600' : 'bg-orange-100 text-orange-600'}`}>
+              {alerta.tipo === 'erro' || alerta.tipo === 'aviso' ? <AlertTriangle size={36} strokeWidth={2.5} /> : <CheckCircle2 size={36} strokeWidth={2.5} />}
+            </div>
+            <h2 className="mb-2 text-2xl font-black text-foreground">{alerta.titulo}</h2>
+            <p className="mb-6 font-semibold text-muted-foreground leading-relaxed">
+              {alerta.mensagem}
+            </p>
+            <button
+              onClick={() => setAlerta(null)}
+              className="w-full rounded-xl bg-primary py-3 text-lg font-bold text-primary-foreground shadow-md transition hover:bg-primary/90 active:scale-95"
+            >
+              Entendido
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="mx-auto grid max-w-7xl gap-6 px-4 py-6 lg:grid-cols-[1fr_400px]">
-        {/* MAGICA DO BLOQUEIO AQUI: Se lojaAberta for false, a tela fica com ponteiro bloqueado e opacidade */}
         <main className={`space-y-5 transition-all duration-300 ${!lojaAberta ? 'pointer-events-none opacity-50 grayscale' : ''}`}>
           <section className="rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-card)]">
             <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
@@ -531,7 +578,7 @@ function Index() {
                     </div>
                   </div>
 
-                  <div className="grid gap-3 md:grid-cols-[120px_1fr_1fr_auto]">
+                  <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-[120px_1fr_1fr_auto] items-center">
                     <select
                       value={meiaTamanho}
                       onChange={(event) => setMeiaTamanho(event.target.value as PizzaSize)}
@@ -549,8 +596,8 @@ function Index() {
                       className="h-11 rounded-lg border border-border bg-card px-3 text-sm font-bold outline-none focus:border-primary"
                     >
                       {pizzas.map((pizza) => (
-                        <option key={pizza.id} value={pizza.id}>
-                          {pizza.name}
+                        <option key={pizza.id} value={pizza.id} disabled={esgotados.includes(pizza.id)} className={esgotados.includes(pizza.id) ? "text-red-600 font-bold" : ""}>
+                          {pizza.name} {esgotados.includes(pizza.id) ? "(ESGOTADO)" : ""}
                         </option>
                       ))}
                     </select>
@@ -560,8 +607,8 @@ function Index() {
                       className="h-11 rounded-lg border border-border bg-card px-3 text-sm font-bold outline-none focus:border-primary"
                     >
                       {pizzas.map((pizza) => (
-                        <option key={pizza.id} value={pizza.id}>
-                          {pizza.name}
+                        <option key={pizza.id} value={pizza.id} disabled={esgotados.includes(pizza.id)} className={esgotados.includes(pizza.id) ? "text-red-600 font-bold" : ""}>
+                          {pizza.name} {esgotados.includes(pizza.id) ? "(ESGOTADO)" : ""}
                         </option>
                       ))}
                     </select>
@@ -576,56 +623,63 @@ function Index() {
                   </div>
                 </div>
 
-                {pizzas.map((pizza) => (
-                  <article
-                    key={pizza.id}
-                    className="rounded-lg border border-border bg-background p-4 transition hover:border-primary hover:shadow-[var(--shadow-card)]"
-                  >
-                    <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <h3 className="text-lg font-black text-foreground">
-                          <span className="mr-2 text-primary">
-                            {String(pizza.id).padStart(2, "0")}.
-                          </span>
-                          {pizza.name}
-                        </h3>
-                        <p className="mt-1 text-sm font-medium text-muted-foreground">
-                          {pizza.description}
-                        </p>
-                        {pizza.highlight && (
-                          <p className="mt-2 text-xs font-black uppercase text-primary">
-                            {pizza.highlight}
-                          </p>
-                        )}
+                {pizzas.map((pizza) => {
+                  const esgotado = esgotados.includes(pizza.id);
+                  return (
+                    <article
+                      key={pizza.id}
+                      className={`rounded-lg border border-border bg-background p-4 transition hover:border-primary hover:shadow-[var(--shadow-card)] ${esgotado ? 'opacity-40 grayscale pointer-events-none' : ''}`}
+                    >
+                      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <h3 className="text-lg font-black text-foreground">
+                            <span className="mr-2 text-primary">
+                              {String(pizza.id).padStart(2, "0")}.
+                            </span>
+                            {pizza.name}
+                          </h3>
+                          {pizza.description && (
+                            <p className="mt-1 text-sm font-medium text-muted-foreground">
+                              {pizza.description}
+                            </p>
+                          )}
+                          {pizza.highlight && (
+                            <p className="mt-2 text-xs font-black uppercase text-primary">
+                              {pizza.highlight}
+                            </p>
+                          )}
+                        </div>
+                        {esgotado && <span className="bg-red-600 text-white px-2 py-0.5 text-[10px] font-black uppercase rounded">ESGOTADO</span>}
                       </div>
-                    </div>
 
-                    <div className="grid grid-cols-3 gap-2">
-                      {tamanhosPizza.map((tamanho) => (
-                        <button
-                          key={tamanho}
-                          type="button"
-                          onClick={() =>
-                            adicionarItem({
-                              key: `pizza-${pizza.id}-${tamanho}`,
-                              id: pizza.id,
-                              nome: `Pizza ${pizza.name}`,
-                              categoria: "pizzas",
-                              tamanho,
-                              precoUnitario: pizza.prices[tamanho],
-                            })
-                          }
-                          className="rounded-lg border-2 border-secondary bg-card px-3 py-2 text-center transition hover:border-primary hover:bg-secondary"
-                        >
-                          <span className="block text-xs font-black text-primary">{tamanho}</span>
-                          <span className="block text-sm font-black text-foreground">
-                            {formatCurrency(pizza.prices[tamanho])}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  </article>
-                ))}
+                      <div className="grid grid-cols-3 gap-2">
+                        {tamanhosPizza.map((tamanho) => (
+                          <button
+                            key={tamanho}
+                            type="button"
+                            disabled={esgotado}
+                            onClick={() =>
+                              adicionarItem({
+                                key: `pizza-${pizza.id}-${tamanho}`,
+                                id: pizza.id,
+                                nome: `Pizza ${pizza.name}`,
+                                categoria: "pizzas",
+                                tamanho,
+                                precoUnitario: pizza.prices[tamanho],
+                              })
+                            }
+                            className="rounded-lg border-2 border-secondary bg-card px-3 py-2 text-center transition hover:border-primary hover:bg-secondary"
+                          >
+                            <span className="block text-xs font-black text-primary">{tamanho}</span>
+                            <span className="block text-sm font-black text-foreground">
+                              {formatCurrency(pizza.prices[tamanho])}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </article>
+                  );
+                })}
               </div>
             )}
 
@@ -638,70 +692,81 @@ function Index() {
                     : tab === "bebidas"
                       ? bebidas
                       : sucos
-                ).map((item) =>
-                  tab === "sucos" ? (
-                    <article
-                      key={item.id}
-                      className="rounded-lg border border-border bg-background p-4 transition hover:border-primary hover:shadow-[var(--shadow-card)]"
-                    >
-                      <div className="mb-3">
-                        <h3 className="text-base font-black text-foreground">
-                          <span className="mr-2 text-primary">{item.id}.</span>
-                          {item.name}
-                        </h3>
-                        <p className="text-xs font-semibold text-muted-foreground">
-                          Ao leite tem acréscimo de {formatCurrency(SUCO_AO_LEITE_ACRESCIMO)}.
-                        </p>
-                      </div>
+                ).map((item) => {
+                  const esgotado = esgotados.includes(item.id);
+                  if (tab === "sucos") {
+                    return (
+                      <article
+                        key={item.id}
+                        className={`rounded-lg border border-border bg-background p-4 transition hover:border-primary hover:shadow-[var(--shadow-card)] ${esgotado ? 'opacity-40 grayscale pointer-events-none' : ''}`}
+                      >
+                        <div className="mb-3 flex justify-between items-start">
+                          <div>
+                            <h3 className="text-base font-black text-foreground">
+                              <span className="mr-2 text-primary">{item.id}.</span>
+                              {item.name}
+                            </h3>
+                            <p className="text-xs font-semibold text-muted-foreground">
+                              Ao leite tem acréscimo de {formatCurrency(SUCO_AO_LEITE_ACRESCIMO)}.
+                            </p>
+                          </div>
+                          {esgotado && <span className="bg-red-600 text-white px-2 py-0.5 text-[10px] font-black uppercase rounded">ESGOTADO</span>}
+                        </div>
 
-                      <div className="grid grid-cols-2 gap-2">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            adicionarItem({
-                              key: `sucos-${item.id}-natural`,
-                              id: item.id,
-                              nome: `Suco ${item.name}`,
-                              categoria: "sucos",
-                              precoUnitario: item.price,
-                            })
-                          }
-                          className="rounded-lg border border-secondary bg-card px-3 py-2 text-left transition hover:border-primary hover:bg-secondary"
-                        >
-                          <span className="block text-xs font-black uppercase text-muted-foreground">
-                            Natural
-                          </span>
-                          <span className="block text-sm font-black text-foreground">
-                            {formatCurrency(item.price)}
-                          </span>
-                        </button>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            disabled={esgotado}
+                            onClick={() =>
+                              adicionarItem({
+                                key: `sucos-${item.id}-natural`,
+                                id: item.id,
+                                nome: `Suco ${item.name}`,
+                                categoria: "sucos",
+                                precoUnitario: item.price,
+                              })
+                            }
+                            className="rounded-lg border border-secondary bg-card px-3 py-2 text-left transition hover:border-primary hover:bg-secondary"
+                          >
+                            <span className="block text-xs font-black uppercase text-muted-foreground">
+                              Natural
+                            </span>
+                            <span className="block text-sm font-black text-foreground">
+                              {formatCurrency(item.price)}
+                            </span>
+                          </button>
 
-                        <button
-                          type="button"
-                          onClick={() =>
-                            adicionarItem({
-                              key: `sucos-${item.id}-ao-leite`,
-                              id: item.id,
-                              nome: `Suco ${item.name} ao leite`,
-                              categoria: "sucos",
-                              precoUnitario: item.price + SUCO_AO_LEITE_ACRESCIMO,
-                            })
-                          }
-                          className="rounded-lg border border-primary bg-secondary px-3 py-2 text-left transition hover:border-primary hover:bg-[var(--brand-yellow-light)]"
-                        >
-                          <span className="block text-xs font-black uppercase text-primary">
-                            Ao leite
-                          </span>
-                          <span className="block text-sm font-black text-foreground">
-                            {formatCurrency(item.price + SUCO_AO_LEITE_ACRESCIMO)}
-                          </span>
-                        </button>
-                      </div>
-                    </article>
-                  ) : (
+                          <button
+                            type="button"
+                            disabled={esgotado}
+                            onClick={() =>
+                              adicionarItem({
+                                key: `sucos-${item.id}-ao-leite`,
+                                id: item.id,
+                                nome: `Suco ${item.name} ao leite`,
+                                categoria: "sucos",
+                                precoUnitario: item.price + SUCO_AO_LEITE_ACRESCIMO,
+                              })
+                            }
+                            className="rounded-lg border border-primary bg-secondary px-3 py-2 text-left transition hover:border-primary hover:bg-[var(--brand-yellow-light)]"
+                          >
+                            <span className="block text-xs font-black uppercase text-primary">
+                              Ao leite
+                            </span>
+                            <span className="block text-sm font-black text-foreground">
+                              {formatCurrency(item.price + SUCO_AO_LEITE_ACRESCIMO)}
+                            </span>
+                          </button>
+                        </div>
+                      </article>
+                    );
+                  }
+
+                  return (
                     <button
                       key={item.id}
                       type="button"
+                      disabled={esgotado}
                       onClick={() =>
                         adicionarItem({
                           key: `${tab}-${item.id}`,
@@ -711,12 +776,13 @@ function Index() {
                           precoUnitario: item.price,
                         })
                       }
-                      className="flex items-center justify-between gap-4 rounded-lg border border-border bg-background p-4 text-left transition hover:border-primary hover:shadow-[var(--shadow-card)]"
+                      className={`flex items-center justify-between gap-4 rounded-lg border border-border bg-background p-4 text-left transition hover:border-primary hover:shadow-[var(--shadow-card)] ${esgotado ? 'opacity-40 grayscale pointer-events-none' : ''}`}
                     >
                       <span>
                         <span className="block text-base font-black text-foreground">
                           <span className="mr-2 text-primary">{item.id}.</span>
                           {item.name}
+                          {esgotado && <span className="ml-2 bg-red-600 text-white px-2 py-0.5 text-[10px] font-black uppercase rounded">ESGOTADO</span>}
                         </span>
                         {item.description && (
                           <span className="mt-1 block text-xs font-medium text-muted-foreground">
@@ -728,8 +794,8 @@ function Index() {
                         {formatCurrency(item.price)}
                       </span>
                     </button>
-                  ),
-                )}
+                  );
+                })}
               </div>
             )}
           </section>
@@ -852,17 +918,11 @@ function Index() {
                   <button
                     type="button"
                     onClick={abrirWhatsAppComprovante}
-                    disabled={!dadosConferenciaOk}
-                    className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-[#25D366] px-3 text-sm font-black uppercase text-white transition hover:bg-[#1fb458] disabled:cursor-not-allowed disabled:opacity-45"
+                    className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-[#25D366] px-3 text-sm font-black uppercase text-white transition hover:bg-[#1fb458]"
                   >
                     <MessageCircle size={17} aria-hidden="true" />
                     Enviar comprovante
                   </button>
-                  {!dadosConferenciaOk && (
-                    <p className="mt-2 text-xs font-semibold text-green-800">
-                      Preencha nome, carrinho e endereço quando for entrega para liberar o envio.
-                    </p>
-                  )}
                 </div>
               )}
 

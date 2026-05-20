@@ -9,10 +9,11 @@ import {
   ShoppingCart,
   Trash2,
   UserRound,
+  AlertTriangle,
 } from "lucide-react";
 import { PinLock } from "@/components/PinLock";
 import { bebidas, pasteis, pizzas, porcoes, sucos, type PizzaSize } from "@/data/menu";
-import { doc, setDoc } from "firebase/firestore";
+import { doc, setDoc, onSnapshot } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 
 export const Route = createFileRoute("/garcom")({
@@ -119,8 +120,20 @@ const gerarIdPedido = () =>
   `MESA-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
 function GarcomRoute() {
+  const [pinGarcom, setPinGarcom] = useState("5566");
+
+  // Busca o PIN atualizado na nuvem antes de liberar o acesso
+  useEffect(() => {
+    const unsubscribe = onSnapshot(doc(db, "configuracoes", "seguranca"), (docSnap) => {
+      if (docSnap.exists() && docSnap.data().pinGarcom) {
+        setPinGarcom(String(docSnap.data().pinGarcom));
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
   return (
-    <PinLock correctPin="5566" title="Tela do Garçom">
+    <PinLock correctPin={pinGarcom} title="Tela do Garçom">
       <GarcomPage />
     </PinLock>
   );
@@ -141,6 +154,12 @@ function GarcomPage() {
   const [mensagemCarrinho, setMensagemCarrinho] = useState("");
   const [modalSucessoAberto, setModalSucessoAberto] = useState(false);
 
+  // ESTADOS DE CONFIGURAÇÕES E ALERTAS
+  const [esgotados, setEsgotados] = useState<number[]>([]);
+  const [lojaAberta, setLojaAberta] = useState(true);
+  const [alerta, setAlerta] = useState<{ titulo: string; mensagem: string; tipo: "sucesso" | "erro" | "aviso" } | null>(null);
+  const [confirmarAcao, setConfirmarAcao] = useState<{ mensagem: string; onConfirm: () => void } | null>(null);
+
   const mensagemTimeoutRef = useRef<number | null>(null);
 
   const subtotal = useMemo(
@@ -158,6 +177,28 @@ function GarcomPage() {
     localStorage.setItem(GARCOM_DRAFT_KEY, JSON.stringify(draft));
   }, [meiaSaborA, meiaSaborB, meiaTamanho, pedido]);
 
+  // ESPIÃO DO CARDÁPIO (Para travar botões de itens esgotados)
+  useEffect(() => {
+    const unsubscribeLoja = onSnapshot(doc(db, "configuracoes", "loja"), (docSnap) => {
+      if (docSnap.exists()) {
+        setLojaAberta(docSnap.data().aberta);
+      } else {
+        setLojaAberta(true);
+      }
+    });
+
+    const unsubscribeCardapio = onSnapshot(doc(db, "configuracoes", "cardapio"), (docSnap) => {
+      if (docSnap.exists() && docSnap.data().esgotados) {
+        setEsgotados(docSnap.data().esgotados);
+      }
+    });
+
+    return () => {
+      unsubscribeLoja();
+      unsubscribeCardapio();
+    };
+  }, []);
+
   const avisarItemAdicionado = (nomeItem: string) => {
     setMensagemCarrinho(`${nomeItem} adicionado à mesa.`);
     if (mensagemTimeoutRef.current) window.clearTimeout(mensagemTimeoutRef.current);
@@ -168,6 +209,14 @@ function GarcomPage() {
   };
 
   const adicionarItem = (item: Omit<ItemCarrinhoGarcom, "quantidade">) => {
+    if (!lojaAberta) {
+      setAlerta({ titulo: "Loja Fechada", mensagem: "O sistema está fechado no momento!", tipo: "aviso" });
+      return;
+    }
+    if (esgotados.includes(item.id)) {
+      setAlerta({ titulo: "Esgotado", mensagem: "Aviso: Este item foi bloqueado pelo Caixa pois está ESGOTADO!", tipo: "erro" });
+      return;
+    }
     setPedido((estadoAtual) => {
       const existente = estadoAtual.carrinho.find((itemAtual) => itemAtual.key === item.key);
       const carrinho = existente
@@ -181,11 +230,20 @@ function GarcomPage() {
   };
 
   const adicionarPizzaMeia = () => {
+    if (!lojaAberta) {
+      setAlerta({ titulo: "Loja Fechada", mensagem: "O sistema está fechado no momento!", tipo: "aviso" });
+      return;
+    }
     const saborA = pizzas.find((pizza) => String(pizza.id) === meiaSaborA);
     const saborB = pizzas.find((pizza) => String(pizza.id) === meiaSaborB);
 
     if (!saborA || !saborB) {
-      alert("Escolha os dois sabores da pizza meia a meia.");
+      setAlerta({ titulo: "Atenção", mensagem: "Escolha os dois sabores da pizza meia a meia.", tipo: "aviso" });
+      return;
+    }
+
+    if (esgotados.includes(saborA.id) || esgotados.includes(saborB.id)) {
+      setAlerta({ titulo: "Sabor Esgotado", mensagem: "Aviso: Um dos sabores escolhidos está ESGOTADO!", tipo: "erro" });
       return;
     }
 
@@ -201,6 +259,7 @@ function GarcomPage() {
   };
 
   const alterarQuantidade = (key: string, delta: number) => {
+    if (!lojaAberta) return;
     setPedido((estadoAtual) => ({
       ...estadoAtual,
       carrinho: estadoAtual.carrinho
@@ -217,30 +276,37 @@ function GarcomPage() {
   };
 
   const limparPedido = () => {
-    if (window.confirm("Deseja realmente limpar a comanda inteira?")) {
-      setPedido({
-        nomeGarcom: "",
-        numeroMesa: "",
-        observacoes: "",
-        carrinho: [],
-      });
-    }
+    setConfirmarAcao({
+      mensagem: "Deseja realmente limpar a comanda inteira?",
+      onConfirm: () => {
+        setPedido({
+          nomeGarcom: "",
+          numeroMesa: "",
+          observacoes: "",
+          carrinho: [],
+        });
+      }
+    });
   };
 
   // ENVIAR PEDIDO PARA O FIREBASE (CAIXA)
   const enviarPedido = async () => {
+    if (!lojaAberta) {
+      setAlerta({ titulo: "Loja Fechada", mensagem: "A loja está fechada. Não é possível enviar comandos.", tipo: "aviso" });
+      return;
+    }
     if (!pedido.nomeGarcom.trim()) {
-      alert("Informe o nome do garçom.");
+      setAlerta({ titulo: "Atenção", mensagem: "Informe o nome do garçom.", tipo: "aviso" });
       return;
     }
 
     if (!pedido.numeroMesa.trim()) {
-      alert("Informe o número da mesa.");
+      setAlerta({ titulo: "Atenção", mensagem: "Informe o número da mesa.", tipo: "aviso" });
       return;
     }
 
     if (pedido.carrinho.length === 0) {
-      alert("Adicione pelo menos um item ao pedido.");
+      setAlerta({ titulo: "Atenção", mensagem: "Adicione pelo menos um item ao pedido.", tipo: "aviso" });
       return;
     }
 
@@ -271,12 +337,12 @@ function GarcomPage() {
       setModalSucessoAberto(true);
     } catch (error) {
       console.error("Erro ao enviar comanda:", error);
-      alert("Falha ao enviar a comanda. Verifique sua conexão com a internet.");
+      setAlerta({ titulo: "Erro", mensagem: "Falha ao enviar a comanda. Verifique sua conexão com a internet.", tipo: "erro" });
     }
   };
 
   return (
-    <main className="min-h-screen bg-background">
+    <main className="min-h-screen bg-background pb-12 lg:pb-0">
       <header className="sticky top-0 z-30 border-b border-border bg-card/95 shadow-[var(--shadow-card)] backdrop-blur">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-3 px-4 py-3">
           <div className="flex-1">
@@ -284,6 +350,11 @@ function GarcomPage() {
               Atendimento de mesa
             </p>
             <h1 className="text-2xl font-black text-primary">Painel do Garçom</h1>
+            {!lojaAberta && (
+              <div className="mt-2 inline-block rounded bg-red-600 px-3 py-1 text-xs font-black uppercase tracking-wider text-white shadow-md animate-pulse">
+                ⚠️ Fechado no momento.
+              </div>
+            )}
           </div>
         </div>
       </header>
@@ -299,8 +370,59 @@ function GarcomPage() {
         </div>
       )}
 
+      {/* --- MODAL GLOBAL DE ALERTA --- */}
+      {alerta && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm transition-opacity">
+          <div className="w-full max-w-sm animate-in fade-in zoom-in-95 rounded-2xl bg-card p-6 text-center shadow-2xl duration-200 border border-border">
+            <div className={`mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full ${alerta.tipo === 'erro' ? 'bg-red-100 text-red-600' : alerta.tipo === 'sucesso' ? 'bg-green-100 text-green-600' : 'bg-orange-100 text-orange-600'}`}>
+              {alerta.tipo === 'erro' || alerta.tipo === 'aviso' ? <AlertTriangle size={36} strokeWidth={2.5} /> : <CheckCircle2 size={36} strokeWidth={2.5} />}
+            </div>
+            <h2 className="mb-2 text-2xl font-black text-foreground">{alerta.titulo}</h2>
+            <p className="mb-6 font-semibold text-muted-foreground leading-relaxed">
+              {alerta.mensagem}
+            </p>
+            <button
+              onClick={() => setAlerta(null)}
+              className="w-full rounded-xl bg-primary py-3 text-lg font-bold text-primary-foreground shadow-md transition hover:bg-primary/90 active:scale-95"
+            >
+              Entendido
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* --- MODAL DE CONFIRMAÇÃO --- */}
+      {confirmarAcao && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm transition-opacity">
+          <div className="w-full max-w-sm animate-in fade-in zoom-in-95 rounded-2xl bg-card p-6 text-center shadow-2xl duration-200 border border-border">
+            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-orange-100 text-orange-600">
+              <AlertTriangle size={36} strokeWidth={2.5} />
+            </div>
+            <h2 className="mb-2 text-2xl font-black text-foreground">Atenção</h2>
+            <p className="mb-6 font-semibold text-muted-foreground leading-relaxed">{confirmarAcao.mensagem}</p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmarAcao(null)}
+                className="flex-1 rounded-xl border border-border bg-background py-3 text-sm font-bold text-foreground transition hover:bg-muted active:scale-95"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => {
+                  confirmarAcao.onConfirm();
+                  setConfirmarAcao(null);
+                }}
+                className="flex-1 rounded-xl bg-primary py-3 text-sm font-bold text-primary-foreground shadow-md transition hover:bg-[var(--brand-red-dark)] active:scale-95"
+              >
+                Sim, Confirmar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="mx-auto grid max-w-7xl gap-6 px-4 py-6 lg:grid-cols-[1fr_390px]">
-        <section className="space-y-4">
+        <section className={`space-y-4 transition-all duration-300 ${!lojaAberta ? 'pointer-events-none opacity-50 grayscale' : ''}`}>
           <div className="rounded-lg border border-border bg-card p-4 shadow-[var(--shadow-card)]">
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="space-y-2">
@@ -370,7 +492,7 @@ function GarcomPage() {
                     </div>
                   </div>
 
-                  <div className="grid gap-3 md:grid-cols-[120px_1fr_1fr_auto]">
+                  <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-[120px_1fr_1fr_auto] items-center">
                     <select
                       value={meiaTamanho}
                       onChange={(event) => setMeiaTamanho(event.target.value as PizzaSize)}
@@ -388,8 +510,8 @@ function GarcomPage() {
                       className="h-11 rounded-lg border border-border bg-card px-3 text-sm font-bold outline-none focus:border-primary"
                     >
                       {pizzas.map((pizza) => (
-                        <option key={pizza.id} value={pizza.id}>
-                          {pizza.name}
+                        <option key={pizza.id} value={pizza.id} disabled={esgotados.includes(pizza.id)} className={esgotados.includes(pizza.id) ? "text-red-600 font-bold" : ""}>
+                          {pizza.name} {esgotados.includes(pizza.id) ? "(ESGOTADO)" : ""}
                         </option>
                       ))}
                     </select>
@@ -399,8 +521,8 @@ function GarcomPage() {
                       className="h-11 rounded-lg border border-border bg-card px-3 text-sm font-bold outline-none focus:border-primary"
                     >
                       {pizzas.map((pizza) => (
-                        <option key={pizza.id} value={pizza.id}>
-                          {pizza.name}
+                        <option key={pizza.id} value={pizza.id} disabled={esgotados.includes(pizza.id)} className={esgotados.includes(pizza.id) ? "text-red-600 font-bold" : ""}>
+                          {pizza.name} {esgotados.includes(pizza.id) ? "(ESGOTADO)" : ""}
                         </option>
                       ))}
                     </select>
@@ -415,58 +537,63 @@ function GarcomPage() {
                   </div>
                 </div>
 
-                {pizzas.map((pizza) => (
-                  <article
-                    key={pizza.id}
-                    className="rounded-lg border border-border bg-background p-4 transition hover:border-primary hover:shadow-[var(--shadow-card)]"
-                  >
-                    <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <h3 className="text-lg font-black text-foreground">
-                          <span className="mr-2 text-primary">
-                            {String(pizza.id).padStart(2, "0")}.
-                          </span>
-                          {pizza.name}
-                        </h3>
-                        {pizza.description && (
-                          <p className="mt-1 text-sm font-medium text-muted-foreground">
-                            {pizza.description}
-                          </p>
-                        )}
-                        {pizza.highlight && (
-                          <p className="mt-2 text-xs font-black uppercase text-primary">
-                            {pizza.highlight}
-                          </p>
-                        )}
+                {pizzas.map((pizza) => {
+                  const esgotado = esgotados.includes(pizza.id);
+                  return (
+                    <article
+                      key={pizza.id}
+                      className={`rounded-lg border border-border bg-background p-4 transition hover:border-primary hover:shadow-[var(--shadow-card)] ${esgotado ? 'opacity-40 grayscale pointer-events-none' : ''}`}
+                    >
+                      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <h3 className="text-lg font-black text-foreground">
+                            <span className="mr-2 text-primary">
+                              {String(pizza.id).padStart(2, "0")}.
+                            </span>
+                            {pizza.name}
+                          </h3>
+                          {pizza.description && (
+                            <p className="mt-1 text-sm font-medium text-muted-foreground">
+                              {pizza.description}
+                            </p>
+                          )}
+                          {pizza.highlight && (
+                            <p className="mt-2 text-xs font-black uppercase text-primary">
+                              {pizza.highlight}
+                            </p>
+                          )}
+                        </div>
+                        {esgotado && <span className="bg-red-600 text-white px-2 py-0.5 text-[10px] font-black uppercase rounded">ESGOTADO</span>}
                       </div>
-                    </div>
 
-                    <div className="grid grid-cols-3 gap-2">
-                      {tamanhosPizza.map((tamanho) => (
-                        <button
-                          key={tamanho}
-                          type="button"
-                          onClick={() =>
-                            adicionarItem({
-                              key: `pizza-${pizza.id}-${tamanho}`,
-                              id: pizza.id,
-                              nome: `Pizza ${pizza.name}`,
-                              categoria: "pizza",
-                              tamanho,
-                              precoUnitario: pizza.prices[tamanho],
-                            })
-                          }
-                          className="rounded-lg border-2 border-secondary bg-card px-3 py-2 text-center transition hover:border-primary hover:bg-secondary"
-                        >
-                          <span className="block text-xs font-black text-primary">{tamanho}</span>
-                          <span className="block text-sm font-black text-foreground">
-                            {formatCurrency(pizza.prices[tamanho])}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  </article>
-                ))}
+                      <div className="grid grid-cols-3 gap-2">
+                        {tamanhosPizza.map((tamanho) => (
+                          <button
+                            key={tamanho}
+                            type="button"
+                            disabled={esgotado}
+                            onClick={() =>
+                              adicionarItem({
+                                key: `pizza-${pizza.id}-${tamanho}`,
+                                id: pizza.id,
+                                nome: `Pizza ${pizza.name}`,
+                                categoria: "pizza",
+                                tamanho,
+                                precoUnitario: pizza.prices[tamanho],
+                              })
+                            }
+                            className="rounded-lg border-2 border-secondary bg-card px-3 py-2 text-center transition hover:border-primary hover:bg-secondary"
+                          >
+                            <span className="block text-xs font-black text-primary">{tamanho}</span>
+                            <span className="block text-sm font-black text-foreground">
+                              {formatCurrency(pizza.prices[tamanho])}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </article>
+                  );
+                })}
               </div>
             )}
 
@@ -480,70 +607,81 @@ function GarcomPage() {
                     : tab === "bebidas"
                       ? bebidas
                       : sucos
-                ).map((item) =>
-                  tab === "sucos" ? (
-                    <article
-                      key={item.id}
-                      className="rounded-lg border border-border bg-background p-4 transition hover:border-primary hover:shadow-[var(--shadow-card)]"
-                    >
-                      <div className="mb-3">
-                        <h3 className="text-base font-black text-foreground">
-                          <span className="mr-2 text-primary">{item.id}.</span>
-                          {item.name}
-                        </h3>
-                        <p className="text-xs font-semibold text-muted-foreground">
-                          Ao leite tem acréscimo de {formatCurrency(SUCO_AO_LEITE_ACRESCIMO)}.
-                        </p>
-                      </div>
+                ).map((item) => {
+                  const esgotado = esgotados.includes(item.id);
+                  if (tab === "sucos") {
+                    return (
+                      <article
+                        key={item.id}
+                        className={`rounded-lg border border-border bg-background p-4 transition hover:border-primary hover:shadow-[var(--shadow-card)] ${esgotado ? 'opacity-40 grayscale pointer-events-none' : ''}`}
+                      >
+                        <div className="mb-3 flex justify-between items-start">
+                          <div>
+                            <h3 className="text-base font-black text-foreground">
+                              <span className="mr-2 text-primary">{item.id}.</span>
+                              {item.name}
+                            </h3>
+                            <p className="text-xs font-semibold text-muted-foreground">
+                              Ao leite tem acréscimo de {formatCurrency(SUCO_AO_LEITE_ACRESCIMO)}.
+                            </p>
+                          </div>
+                          {esgotado && <span className="bg-red-600 text-white px-2 py-0.5 text-[10px] font-black uppercase rounded">ESGOTADO</span>}
+                        </div>
 
-                      <div className="grid grid-cols-2 gap-2">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            adicionarItem({
-                              key: `suco-${item.id}-natural`,
-                              id: item.id,
-                              nome: `Suco ${item.name}`,
-                              categoria: "suco",
-                              precoUnitario: item.price,
-                            })
-                          }
-                          className="rounded-lg border border-secondary bg-card px-3 py-2 text-left transition hover:border-primary hover:bg-secondary"
-                        >
-                          <span className="block text-xs font-black uppercase text-muted-foreground">
-                            Natural
-                          </span>
-                          <span className="block text-sm font-black text-foreground">
-                            {formatCurrency(item.price)}
-                          </span>
-                        </button>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            disabled={esgotado}
+                            onClick={() =>
+                              adicionarItem({
+                                key: `suco-${item.id}-natural`,
+                                id: item.id,
+                                nome: `Suco ${item.name}`,
+                                categoria: "suco", // Corrigido para "suco"
+                                precoUnitario: item.price,
+                              })
+                            }
+                            className="rounded-lg border border-secondary bg-card px-3 py-2 text-left transition hover:border-primary hover:bg-secondary"
+                          >
+                            <span className="block text-xs font-black uppercase text-muted-foreground">
+                              Natural
+                            </span>
+                            <span className="block text-sm font-black text-foreground">
+                              {formatCurrency(item.price)}
+                            </span>
+                          </button>
 
-                        <button
-                          type="button"
-                          onClick={() =>
-                            adicionarItem({
-                              key: `suco-${item.id}-ao-leite`,
-                              id: item.id,
-                              nome: `Suco ${item.name} ao leite`,
-                              categoria: "suco",
-                              precoUnitario: item.price + SUCO_AO_LEITE_ACRESCIMO,
-                            })
-                          }
-                          className="rounded-lg border border-primary bg-secondary px-3 py-2 text-left transition hover:border-primary hover:bg-[var(--brand-yellow-light)]"
-                        >
-                          <span className="block text-xs font-black uppercase text-primary">
-                            Ao leite
-                          </span>
-                          <span className="block text-sm font-black text-foreground">
-                            {formatCurrency(item.price + SUCO_AO_LEITE_ACRESCIMO)}
-                          </span>
-                        </button>
-                      </div>
-                    </article>
-                  ) : (
+                          <button
+                            type="button"
+                            disabled={esgotado}
+                            onClick={() =>
+                              adicionarItem({
+                                key: `suco-${item.id}-ao-leite`,
+                                id: item.id,
+                                nome: `Suco ${item.name} ao leite`,
+                                categoria: "suco", // Corrigido para "suco"
+                                precoUnitario: item.price + SUCO_AO_LEITE_ACRESCIMO,
+                              })
+                            }
+                            className="rounded-lg border border-primary bg-secondary px-3 py-2 text-left transition hover:border-primary hover:bg-[var(--brand-yellow-light)]"
+                          >
+                            <span className="block text-xs font-black uppercase text-primary">
+                              Ao leite
+                            </span>
+                            <span className="block text-sm font-black text-foreground">
+                              {formatCurrency(item.price + SUCO_AO_LEITE_ACRESCIMO)}
+                            </span>
+                          </button>
+                        </div>
+                      </article>
+                    );
+                  }
+
+                  return (
                     <button
                       key={item.id}
                       type="button"
+                      disabled={esgotado}
                       onClick={() =>
                         adicionarItem({
                           key: `${tab}-${item.id}`,
@@ -553,12 +691,13 @@ function GarcomPage() {
                           precoUnitario: item.price,
                         })
                       }
-                      className="flex items-center justify-between gap-4 rounded-lg border border-border bg-background p-4 text-left transition hover:border-primary hover:shadow-[var(--shadow-card)]"
+                      className={`flex items-center justify-between gap-4 rounded-lg border border-border bg-background p-4 text-left transition hover:border-primary hover:shadow-[var(--shadow-card)] ${esgotado ? 'opacity-40 grayscale pointer-events-none' : ''}`}
                     >
                       <span>
                         <span className="block text-base font-black text-foreground">
                           <span className="mr-2 text-primary">{item.id}.</span>
                           {item.name}
+                          {esgotado && <span className="ml-2 bg-red-600 text-white px-2 py-0.5 text-[10px] font-black uppercase rounded">ESGOTADO</span>}
                         </span>
                         {item.description && (
                           <span className="mt-1 block text-xs font-medium text-muted-foreground">
@@ -570,14 +709,14 @@ function GarcomPage() {
                         {formatCurrency(item.price)}
                       </span>
                     </button>
-                  ),
-                )}
+                  );
+                })}
               </div>
             )}
           </div>
         </section>
 
-        <aside className="lg:sticky lg:top-24 lg:self-start">
+        <aside className={`lg:sticky lg:top-24 lg:self-start transition-all duration-300 ${!lojaAberta ? 'pointer-events-none opacity-50 grayscale' : ''}`}>
           <section className="flex flex-col rounded-lg border-2 border-primary bg-card shadow-[var(--shadow-warm)]">
             <div className="flex items-center justify-between gap-3 bg-primary px-4 py-3 text-primary-foreground">
               <h2 className="flex items-center gap-2 text-lg font-black uppercase">
@@ -626,6 +765,7 @@ function GarcomPage() {
                             type="button"
                             onClick={() => alterarQuantidade(item.key, -1)}
                             className="grid h-8 w-8 place-items-center rounded-lg bg-secondary text-secondary-foreground transition hover:bg-primary hover:text-primary-foreground"
+                            aria-label={`Diminuir ${item.nome}`}
                           >
                             <Minus size={16} aria-hidden="true" />
                           </button>
@@ -636,6 +776,7 @@ function GarcomPage() {
                             type="button"
                             onClick={() => alterarQuantidade(item.key, 1)}
                             className="grid h-8 w-8 place-items-center rounded-lg bg-primary text-primary-foreground transition hover:bg-[var(--brand-red-dark)]"
+                            aria-label={`Aumentar ${item.nome}`}
                           >
                             <Plus size={16} aria-hidden="true" />
                           </button>
